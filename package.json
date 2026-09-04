@@ -1,0 +1,16 @@
+{
+  "name": "solid-prerender-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "pretty": "prettier --write \"packages/*/{src,test}/**/*.ts\"",
+    "release": "pnpm build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.0",
+    "prettier": "^3.6.0"
+  },
+  "packageManager": "pnpm@10.11.0"
+}
