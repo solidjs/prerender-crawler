@@ -21,11 +21,17 @@ const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms
 
 async function resolveSeeds(pages: PrerenderOptions["pages"]): Promise<PageEntry[]> {
   const source = typeof pages === "function" ? await pages() : (pages ?? ["/"]);
-  return source.map(entry =>
-    typeof entry === "string"
-      ? { path: normalizePath(entry) }
-      : { ...entry, path: normalizePath(entry.path) }
-  );
+  // Seed sources overlap routinely (an explicit list plus a route-manifest
+  // scan both naming `/`): one render per path, the first spelling wins.
+  const byPath = new Map<string, PageEntry>();
+  for (const entry of source) {
+    const page =
+      typeof entry === "string"
+        ? { path: normalizePath(entry) }
+        : { ...entry, path: normalizePath(entry.path) };
+    if (!byPath.has(page.path)) byPath.set(page.path, page);
+  }
+  return [...byPath.values()];
 }
 
 /**
@@ -42,6 +48,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     hintHeader = "x-prerender",
     filter,
     concurrency = 8,
+    interval = 0,
     retries = 2,
     retryDelay = 500,
     failOnError = true,
@@ -66,18 +73,39 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
   const seeds = await resolveSeeds(options.pages);
   const seen = new Set(seeds.map(page => page.path));
   const queue: PageEntry[] = [...seeds];
+  // Provenance: which pages named each discovered path. Recorded for every
+  // mention (not just the first), so a failure can point at every page
+  // carrying the broken link.
+  const referrers = new Map<string, Set<string>>();
+  const referrersOf = (path: string) => [...(referrers.get(path) ?? [])];
 
   // Discovered paths (crawled links, header hints) pass the filter;
   // explicitly seeded pages are the caller's statement of intent and skip it.
-  const discovered = (path: string) => {
+  const discovered = (path: string, from: string) => {
+    let sources = referrers.get(path);
+    if (!sources) referrers.set(path, (sources = new Set()));
+    sources.add(from);
     if (seen.has(path) || (filter && !filter(path))) return;
     seen.add(path);
     queue.push({ path });
   };
 
+  // The throttle: every request start claims the next slot on a shared
+  // timeline, so starts are at least `interval` apart no matter how many
+  // workers are running.
+  let nextSlot = 0;
+  async function pace() {
+    if (interval <= 0) return;
+    const now = Date.now();
+    const slot = Math.max(now, nextSlot);
+    nextSlot = slot + interval;
+    if (slot > now) await wait(slot - now);
+  }
+
   async function fetchFollowingRedirects(path: string): Promise<Response> {
     let url = new URL(path, originUrl);
     for (let hop = 0; ; hop++) {
+      await pace();
       const response = await transport.fetch(
         new Request(url, { headers: { accept: "text/html,*/*", [hintHeader]: "1" } })
       );
@@ -109,12 +137,20 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
       }
     }
     if (!response || error !== undefined || response.status >= 400) {
+      // The message carries provenance: a 404 is usually a broken link, and
+      // the fix lives on the pages that carry it, not at the missing route.
+      const from = referrersOf(entry.path);
+      const linked = from.length ? ` (linked from ${from.join(", ")})` : "";
       const failure =
         error !== undefined
-          ? error
-          : new Error(`Prerendering ${entry.path} answered ${response!.status}`);
+          ? new Error(`Prerendering ${entry.path} failed${linked}: ${describe(error)}`, {
+              cause: error
+            })
+          : new Error(`Prerendering ${entry.path} answered ${response!.status}${linked}`);
       if (failOnError) throw failure;
-      skipped.push({ path: entry.path, error: failure });
+      // referrers are completed once the crawl settles: pages still in
+      // flight may yet link here, and the report should name all of them
+      skipped.push({ path: entry.path, error: failure, referrers: [] });
       return;
     }
 
@@ -141,17 +177,26 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
 
     if (isHTML) {
       const pageUrl = new URL(entry.path, originUrl);
-      if (crawlLinks) for (const path of extractLinks(html, pageUrl)) discovered(path);
+      if (crawlLinks) {
+        for (const path of extractLinks(html, pageUrl)) discovered(path, entry.path);
+      }
     }
     const hints = response.headers.get(hintHeader);
     if (hints) {
       for (const hint of hints.split(",")) {
         const path = normalizeLink(hint.trim(), originUrl, originUrl.origin);
-        if (path !== undefined) discovered(path);
+        if (path !== undefined) discovered(path, entry.path);
       }
     }
 
-    const page: RenderedPage = { path: entry.path, filename, emitted, response, html };
+    const page: RenderedPage = {
+      path: entry.path,
+      referrers: referrersOf(entry.path),
+      filename,
+      emitted,
+      response,
+      html
+    };
     rendered.push(page);
     if (onRendered) await onRendered(page);
   }
@@ -186,6 +231,8 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
       pump();
     });
 
+    for (const miss of skipped) miss.referrers = referrersOf(miss.path);
+
     for (const integration of integrations) await integration.teardown?.(context);
 
     for (const file of emitted) {
@@ -197,6 +244,8 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
 
   return { pages: rendered, files: emitted, skipped };
 }
+
+const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 function redirectStub(location: string): string {
   const target = String(location).replace(/"/g, "&quot;");

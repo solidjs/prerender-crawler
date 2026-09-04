@@ -11,5 +11,6 @@ export type {
   PrerenderOptions,
   PrerenderResult,
   RenderedPage,
+  SkippedPage,
   Transport
 } from "./types.ts";

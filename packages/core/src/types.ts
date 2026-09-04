@@ -45,6 +45,12 @@ export type PagesSource =
 export interface RenderedPage {
   /** The normalized route path (`/about`), origin and query stripped. */
   path: string;
+  /**
+   * The pages whose links (or hint headers) led here, as known when this
+   * page rendered; empty for seeds. Provenance for diagnostics — "why was
+   * this route crawled" — and for sitemap tooling.
+   */
+  referrers: string[];
   /** The page's output file (written only when `emitted`), relative to the output directory. */
   filename: string;
   /** Whether the HTML was written to disk (see `emitPages` / `PageEntry.emit`). */
@@ -101,6 +107,13 @@ export interface PrerenderOptions {
   filter?(path: string): boolean;
   /** Pages in flight at once. @default 8 */
   concurrency?: number;
+  /**
+   * Minimum milliseconds between the starts of consecutive requests, across
+   * all workers — a throttle for renders that call rate-limited external
+   * APIs. `concurrency` bounds how many are in flight; `interval` bounds how
+   * fast new ones begin. @default 0
+   */
+  interval?: number;
   /** Re-fetch attempts for a failed page. @default 2 */
   retries?: number;
   /** Milliseconds between attempts. @default 500 */
@@ -133,11 +146,19 @@ export interface PrerenderOptions {
   integrations?: PrerenderIntegration[];
 }
 
+/** A page that failed after retries and was left out of the output. */
+export interface SkippedPage {
+  path: string;
+  error: unknown;
+  /** The pages that linked here — where to look for the broken link. */
+  referrers: string[];
+}
+
 /** What a finished run reports. */
 export interface PrerenderResult {
   pages: RenderedPage[];
   /** Extra files integrations emitted. */
   files: EmittedFile[];
   /** Paths that failed and were skipped (only with `failOnError: false`). */
-  skipped: Array<{ path: string; error: unknown }>;
+  skipped: SkippedPage[];
 }

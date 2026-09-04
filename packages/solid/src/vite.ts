@@ -1,6 +1,6 @@
 // The Vite plugin: `prerender()` from `@solidjs/prerender/vite`.
 //
-// Two responsibilities, both build-only:
+// Three responsibilities, all build-only:
 //
 // 1. Posture: swap `@solidjs/prerender/env` in the CLIENT environment for a
 //    static-posture module (staticArtifacts: true, plus the app's base), so
@@ -16,11 +16,20 @@
 //    capture integration rides the crawl: a sink installed for its
 //    duration collects every static call the renders execute, and the
 //    artifacts are emitted into the client output next to the pages.
+// 3. The guard: a post-order companion plugin records every server
+//    function id the compiled CLIENT code references. After the walk, ids
+//    nothing captured are calls a static deployment cannot answer — static
+//    mode fails the build naming them, instead of letting them 404 in
+//    production.
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Plugin } from "vite";
 import { runPrerender } from "prerender-core";
-import type { PrerenderIntegration, PrerenderOptions } from "prerender-core";
+import type { PageEntry, PrerenderIntegration, PrerenderOptions } from "prerender-core";
+import { fileRoutePages, hasFileSystemRouting } from "./file-routes.ts";
+import type { FileRoutePagesOptions } from "./file-routes.ts";
+import { collectServerReferences } from "./references.ts";
 import { CAPTURE_SINK, canonicalJSON, staticArtifactPath } from "./shared.ts";
 import type { CaptureSink } from "./shared.ts";
 
@@ -33,8 +42,12 @@ export type {
   PrerenderOptions,
   PrerenderResult,
   RenderedPage,
+  SkippedPage,
   Transport
 } from "prerender-core";
+export { fileRoutePages, staticRoutePaths } from "./file-routes.ts";
+export type { FileRoutePagesOptions, RouteEntryLike } from "./file-routes.ts";
+export { collectServerReferences } from "./references.ts";
 
 export interface PrerenderPluginOptions extends PrerenderOptions {
   /**
@@ -49,10 +62,10 @@ export interface PrerenderPluginOptions extends PrerenderOptions {
    *   to live GET dispatch when the build never made the call — nothing
    *   breaks by declaring a function prerendered.
    * - `"static"`: no server is deployed (SSG). Every rendered page is
-   *   written (the HTML is the product), and a missing artifact at runtime
-   *   is a hard error naming the call, since there is nobody to fall back
-   *   to. The server build is a build-time rendering tool, not a
-   *   deliverable.
+   *   written (the HTML is the product), a missing artifact at runtime is
+   *   a hard error naming the call, and the build fails when the client
+   *   references server functions nothing prerendered (see `uncaptured`).
+   *   The server build is a build-time rendering tool, not a deliverable.
    */
   mode?: "hybrid" | "static";
   /**
@@ -69,6 +82,26 @@ export interface PrerenderPluginOptions extends PrerenderOptions {
    * there. Plain JSON-safe results never touch the codec.
    */
   codec?: unknown;
+  /**
+   * Seed the crawl with the static pages of the project's
+   * `filesystem-routing` route directory, merged with `pages`. Pages
+   * nothing links to still get built, and the crawl starts wide instead
+   * of unwinding from `/`. Dynamic routes are still discovered by links.
+   *
+   * `true` (default) applies when the package and `src/routes` exist and
+   * is silently skipped otherwise; pass options to mirror a customized
+   * `fileRoutes({ dir, extensions })` (then a missing package is an error);
+   * `false` disables it.
+   */
+  fileRoutes?: boolean | FileRoutePagesOptions;
+  /**
+   * What to do when the compiled client references server functions the
+   * walk never captured — calls a static deployment cannot answer (no
+   * server), whether the function lacks `prerendered()` or no prerendered
+   * page ever called it. `"error"` fails the build naming each one.
+   * @default "error" in static mode, "ignore" in hybrid (a server exists)
+   */
+  uncaptured?: "error" | "warn" | "ignore";
 }
 
 const ENV_ID = "@solidjs/prerender/env";
@@ -76,16 +109,25 @@ const RESOLVED_ENV_ID = "\0solid-prerender:env";
 
 /**
  * Prerenders the app at build time: crawls the built server handler
- * starting from `pages` (default `["/"]`, plus every same-origin link
- * discovered along the way), writes each page's HTML into the client
- * output, and captures `prerendered` results as static artifacts.
+ * starting from `pages` (default `["/"]` plus the file-routed static
+ * pages, plus every same-origin link discovered along the way), writes
+ * each page's HTML into the client output, and captures `prerendered`
+ * results as static artifacts.
  */
-export function prerender(options: PrerenderPluginOptions = {}): Plugin {
-  const fallback = (options.mode ?? "hybrid") !== "static";
+export function prerender(options: PrerenderPluginOptions = {}): Plugin[] {
+  const mode = options.mode ?? "hybrid";
+  const fallback = mode !== "static";
   let base = "/";
-  return {
+  // server-function id -> the client modules referencing it
+  const references = new Map<string, Set<string>>();
+
+  const main: Plugin = {
     name: "solid-prerender",
     apply: "build",
+    // One instance across environments: Vite otherwise re-instantiates
+    // plugins per environment build, and the reference map the scanner
+    // fills during the CLIENT build must be the one `buildApp` reads.
+    sharedDuringBuild: true,
     // `pre` is load-bearing: `@solidjs/prerender/env` is a REAL module
     // (the package's live-posture default), so the bundler's native
     // resolution handles it without ever consulting normal-order JS
@@ -118,6 +160,7 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
         }
 
         const root = builder.config.root;
+        const logger = builder.config.logger;
         const clientOut = path.resolve(
           root,
           builder.environments.client?.config.build.outDir ?? "dist/client"
@@ -155,28 +198,112 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
           );
         }
 
-        const { serverEntry: _entry, mode, codec, integrations = [], ...crawl } = options;
+        const routeSeeds = await fileRouteSeeds(root, options.fileRoutes);
+        const {
+          serverEntry: _entry,
+          mode: _mode,
+          codec,
+          fileRoutes: _fileRoutes,
+          uncaptured: _uncaptured,
+          pages,
+          integrations = [],
+          ...crawl
+        } = options;
+        const capture = createCaptureIntegration(codec);
         const result = await runPrerender({
           ...crawl,
+          pages: async () => [
+            ...(typeof pages === "function" ? await pages() : (pages ?? ["/"])),
+            ...routeSeeds
+          ],
           // hybrid's walk bakes data; writing its HTML would shadow live SSR
           emitPages: options.emitPages ?? mode === "static",
           transport: { fetch: request => handleRequest(request) },
           outDir: clientOut,
-          integrations: [createCaptureIntegration(codec), ...integrations]
+          integrations: [capture, ...integrations]
         });
 
-        const logger = builder.config.logger;
         const written = result.pages.filter(page => page.emitted).length;
+        const seeded = routeSeeds.length ? `, ${routeSeeds.length} seeded from file routes` : "";
         logger.info(
-          `[solid-prerender] rendered ${result.pages.length} page(s) (${written} written), ` +
+          `[solid-prerender] rendered ${result.pages.length} page(s) (${written} written${seeded}), ` +
             `${result.files.length} static artifact(s) -> ${path.relative(root, clientOut)}`
         );
         for (const miss of result.skipped) {
-          logger.warn(`[solid-prerender] skipped ${miss.path}: ${String(miss.error)}`);
+          logger.warn(`[solid-prerender] skipped ${miss.path}: ${describe(miss.error)}`);
+        }
+
+        // The guard: every id the client can dispatch, minus every id the
+        // walk captured, is a call the static site has no answer for.
+        const policy = options.uncaptured ?? (mode === "static" ? "error" : "ignore");
+        const uncaptured = [...references].filter(([id]) => !capture.captured.has(id));
+        if (policy !== "ignore" && uncaptured.length) {
+          const lines = uncaptured.map(
+            ([id, modules]) =>
+              `  - ${id} (${[...modules].map(module => path.relative(root, module)).join(", ")})`
+          );
+          const message =
+            `[solid-prerender] ${uncaptured.length} server function(s) the client can call ` +
+            `were never captured during prerendering:\n${lines.join("\n")}\n` +
+            `A static deployment has no server to answer them, so these calls fail at runtime. ` +
+            `Wrap each in prerendered() and make sure a prerendered page performs the call ` +
+            `(same arguments); calls that must stay live — mutations, per-request data — need ` +
+            `a deployed server (mode: "hybrid"). Set uncaptured: "warn" to build anyway.`;
+          if (policy === "error") throw new Error(message);
+          logger.warn(message);
         }
       }
     }
   };
+
+  // The reference scanner. Post-order so it sees the compiled output of
+  // the "use server" transform; client-only because that is the set of
+  // functions a deployed browser can actually dispatch.
+  const scanner: Plugin = {
+    name: "solid-prerender:references",
+    apply: "build",
+    enforce: "post",
+    sharedDuringBuild: true,
+    buildStart() {
+      if (this.environment?.name === "client") references.clear();
+    },
+    transform(code, id) {
+      if (this.environment?.name !== "client") return;
+      const ids = collectServerReferences(code);
+      if (ids.length === 0) return;
+      // route modules reach the client as `?pick=` variants of one file
+      const module = id.split("?")[0];
+      for (const ref of ids) {
+        let modules = references.get(ref);
+        if (!modules) references.set(ref, (modules = new Set()));
+        modules.add(module);
+      }
+    }
+  };
+
+  return [main, scanner];
+}
+
+async function fileRouteSeeds(
+  root: string,
+  option: PrerenderPluginOptions["fileRoutes"]
+): Promise<Array<string | PageEntry>> {
+  if (option === false) return [];
+  const explicit = typeof option === "object" ? option : undefined;
+  if (!explicit) {
+    // auto mode: only when the project actually uses file routing
+    const dir = path.resolve(root, "src/routes");
+    if (!hasFileSystemRouting(root) || !existsSync(dir)) return [];
+  }
+  return fileRoutePages({ root, ...explicit })();
+}
+
+const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** The capture integration, with the ids it saw — what the static-mode guard checks against. */
+export interface CaptureIntegration extends PrerenderIntegration {
+  /** Every server-function id captured at least once during the walk. */
+  readonly captured: ReadonlySet<string>;
 }
 
 /**
@@ -191,14 +318,17 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
  * The `prerender()` plugin wires this up itself; exported for setups
  * driving `runPrerender` by hand.
  */
-export function createCaptureIntegration(codec?: unknown): PrerenderIntegration {
+export function createCaptureIntegration(codec?: unknown): CaptureIntegration {
   const artifacts = new Map<string, Promise<string>>();
+  const captured = new Set<string>();
   const globals = globalThis as { [CAPTURE_SINK]?: CaptureSink };
   return {
     name: "solid-prerender:static-artifacts",
+    captured,
     setup() {
       globals[CAPTURE_SINK] = {
         async capture(id, args, value) {
+          captured.add(id);
           const filename = await staticArtifactPath(id, args);
           // one call identity, one artifact: the same call captured on many
           // pages encodes once, and every capture awaits the same settle

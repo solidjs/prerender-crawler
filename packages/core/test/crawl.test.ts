@@ -274,6 +274,79 @@ describe("crawl", () => {
     expect(await readFile(join(outDir, "blog/post/index.html"), "utf8")).toBe("post");
   });
 
+  it("dedupes overlapping seed sources, first spelling wins", async () => {
+    const { transport, requests } = site({ "/": html("index"), "/about": html("about") });
+    const result = await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      pages: ["/", { path: "/about", filename: "custom.html" }, "/about/", "/"],
+      crawlLinks: false
+    });
+    expect(requests.sort()).toEqual(["/", "/about"]);
+    expect(result.pages.find(p => p.path === "/about")?.filename).toBe("custom.html");
+  });
+
+  it("records referrers for discovered pages and names them on failures", async () => {
+    const { transport } = site({
+      "/": html(`<a href="/about">a</a> <a href="/missing">m</a>`),
+      "/about": html(`<a href="/missing">m again</a>`, {
+        headers: { "x-prerender": "/hinted" }
+      }),
+      "/hinted": html("hinted")
+    });
+    const result = await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      retries: 0,
+      failOnError: false
+    });
+    const byPath = Object.fromEntries(result.pages.map(p => [p.path, p.referrers]));
+    expect(byPath["/"]).toEqual([]); // a seed came from nobody
+    expect(byPath["/about"]).toEqual(["/"]);
+    expect(byPath["/hinted"]).toEqual(["/about"]); // header hints count as links
+    // the broken link is reported from every page that carries it — resolved
+    // after the crawl settles, since /about may render after /missing failed
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].referrers.sort()).toEqual(["/", "/about"]);
+    expect(String(result.skipped[0].error)).toMatch(/answered 404 \(linked from \//);
+
+    // and the thrown form carries the same provenance, keeping the cause
+    const broken = site({ "/": html(`<a href="/boom">b</a>`), "/boom": () => { throw new Error("kaboom"); } });
+    await expect(
+      runPrerender({ transport: broken.transport, outDir: await makeOutDir(), retries: 0 })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Prerendering \/boom failed \(linked from \/\): kaboom/),
+      cause: expect.objectContaining({ message: "kaboom" })
+    });
+  });
+
+  it("spaces request starts by the interval across all workers", async () => {
+    const starts: number[] = [];
+    const routes: Record<string, Answer> = { "/": html("index") };
+    for (let i = 0; i < 5; i++) routes[`/p${i}`] = html("leaf");
+    const base = site(routes);
+    const transport: Transport = {
+      fetch(request) {
+        starts.push(performance.now());
+        return base.transport.fetch(request);
+      }
+    };
+    await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      pages: ["/", "/p0", "/p1", "/p2", "/p3", "/p4"],
+      crawlLinks: false,
+      concurrency: 4,
+      interval: 20
+    });
+    starts.sort((a, b) => a - b);
+    for (let i = 1; i < starts.length; i++) {
+      // timers may fire a hair early; the gap must be essentially the interval
+      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(18);
+    }
+    expect(starts).toHaveLength(6);
+  });
+
   it("respects the concurrency bound", async () => {
     let active = 0;
     let peak = 0;

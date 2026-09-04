@@ -66,6 +66,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
+      filesystem-routing:
+        specifier: 0.2.1
+        version: 0.2.1(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))
       prerender-core:
         specifier: workspace:*
         version: link:../core
