@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  # Publish gate: nothing reaches npm without the suite passing on this push.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm --filter example-ssg build
+
+  # With pending changesets: opens/updates the "Version Packages" PR. When
+  # that PR merges (no changesets left, versions bumped): publishes.
+  #
+  # Publishing authenticates with npm trusted publishing (OIDC) — no token.
+  # Each package (prerender-crawler, @solidjs/prerender) must have this
+  # repo + this workflow file registered as a Trusted Publisher on
+  # npmjs.com. npm only allows that on an EXISTING package, so the first
+  # publish of each name is a manual `pnpm release` by a maintainer.
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: Create Release Pull Request or Publish to npm
+        uses: changesets/action@v1
+        with:
+          publish: pnpm release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
