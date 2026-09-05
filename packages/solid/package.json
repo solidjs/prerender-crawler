@@ -1,6 +1,6 @@
 {
   "name": "@solidjs/prerender",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Solid's integration for prerender-crawler: prerendered() turns server functions into build-time data captured as static artifacts, and the serverFunctions() integration captures them during the crawl and guards static builds against calls nothing prerendered.",
   "license": "MIT",
   "author": "Ryan Carniato",

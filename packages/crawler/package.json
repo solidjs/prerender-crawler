@@ -1,6 +1,6 @@
 {
   "name": "prerender-crawler",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Framework-agnostic build-time prerendering. Point it at anything fetch-shaped (Request in, Response out) and it crawls the site into static HTML: seeds, link discovery, header hints, redirects, retries, throttling, and an integration seam for build-time data capture. Ships a Vite plugin at prerender-crawler/vite.",
   "license": "MIT",
   "author": "Ryan Carniato",
