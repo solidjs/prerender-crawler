@@ -6,11 +6,11 @@
   "author": "Ryan Carniato",
   "repository": {
     "type": "git",
-    "url": "https://github.com/solidjs/prerender",
+    "url": "https://github.com/solidjs/prerender-crawler",
     "directory": "packages/crawler"
   },
-  "homepage": "https://github.com/solidjs/prerender/tree/main/packages/crawler#readme",
-  "bugs": "https://github.com/solidjs/prerender/issues",
+  "homepage": "https://github.com/solidjs/prerender-crawler/tree/main/packages/crawler#readme",
+  "bugs": "https://github.com/solidjs/prerender-crawler/issues",
   "keywords": [
     "prerender",
     "prerendering",

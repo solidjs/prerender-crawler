@@ -1,4 +1,4 @@
-# prerender
+# prerender-crawler
 
 Build-time prerendering for fetch-shaped apps, and Solid's integration on top of it.
 
