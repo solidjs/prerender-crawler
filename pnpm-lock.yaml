@@ -37,8 +37,8 @@ importers:
         version: 2.0.0-rc.6
     devDependencies:
       '@solidjs/vite-plugin':
-        specifier: ^3.0.0-next.38
-        version: 3.0.0-next.38(@solidjs/web@2.0.0-rc.6(solid-js@2.0.0-rc.6))(solid-js@2.0.0-rc.6)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))
+        specifier: ^3.0.0-next.39
+        version: 3.0.0-next.39(@solidjs/web@2.0.0-rc.6(solid-js@2.0.0-rc.6))(solid-js@2.0.0-rc.6)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))
       filesystem-routing:
         specifier: 0.2.1
         version: 0.2.1(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))
@@ -866,8 +866,8 @@ packages:
   '@solidjs/signals@2.0.0-rc.6':
     resolution: {integrity: sha512-lPqwZNLPq1Z9CBvgXkMvi1ZFr5OHUiFNz1X40+yehszDWEbJkneZx7BGKIe9eMT/AN1NSL+PMjOiMyZaqVB2xw==}
 
-  '@solidjs/vite-plugin@3.0.0-next.38':
-    resolution: {integrity: sha512-6XiolrrjNcw3g+EZyxrh/ifGNJ3zk+zePQ61jRs5YuXwmcSQENN7dNE0X0beb3wow/UoZyRUtxaRkhVNPGKgiQ==}
+  '@solidjs/vite-plugin@3.0.0-next.39':
+    resolution: {integrity: sha512-gIJI6TJd3Vs5LYSZ7w1oil5sy0dC+QuheHhTUYdwYSFy/v8yuHXKJ+tUl3dBg1yF7pZ9zbtV9d9UvNMgeyceFg==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@solidjs/start-devtools': ^1.0.0-next.2
@@ -2470,7 +2470,7 @@ snapshots:
 
   '@solidjs/signals@2.0.0-rc.6': {}
 
-  '@solidjs/vite-plugin@3.0.0-next.38(@solidjs/web@2.0.0-rc.6(solid-js@2.0.0-rc.6))(solid-js@2.0.0-rc.6)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))':
+  '@solidjs/vite-plugin@3.0.0-next.39(@solidjs/web@2.0.0-rc.6(solid-js@2.0.0-rc.6))(solid-js@2.0.0-rc.6)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))':
     dependencies:
       '@ampproject/remapping': 2.3.0
       '@babel/core': 7.29.7

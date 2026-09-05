@@ -19,7 +19,7 @@
     "solid-js": "^2.0.0-rc.6"
   },
   "devDependencies": {
-    "@solidjs/vite-plugin": "^3.0.0-next.38",
+    "@solidjs/vite-plugin": "^3.0.0-next.39",
     "filesystem-routing": "0.2.1",
     "typescript": "^5.9.2",
     "vite": "^8.1.5"
