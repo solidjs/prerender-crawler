@@ -3,7 +3,9 @@ import { canonicalJSON, staticArtifactPath, staticCallKey } from "../src/shared.
 
 describe("canonicalJSON", () => {
   it("spells structurally equal values identically regardless of key order", () => {
-    expect(canonicalJSON({ b: 1, a: { d: 2, c: 3 } })).toBe(canonicalJSON({ a: { c: 3, d: 2 }, b: 1 }));
+    expect(canonicalJSON({ b: 1, a: { d: 2, c: 3 } })).toBe(
+      canonicalJSON({ a: { c: 3, d: 2 }, b: 1 })
+    );
     expect(canonicalJSON({ b: 1, a: 2 })).toBe('{"a":2,"b":1}');
   });
 

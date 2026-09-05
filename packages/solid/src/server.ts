@@ -1,7 +1,7 @@
 // Server half of `prerendered`. On the server a prerendered reference is
 // the GET-declared reference with one extra behavior: while a capture sink
 // is installed (the prerender integration installs one for the duration of
-// the crawl — see ./vite.ts), every executed call is delivered to it as
+// the crawl — see ./integration.ts), every executed call is delivered to it as
 // (id, args, settled value), and the delivery is AWAITED so a page's
 // render does not finish before its artifacts are safely captured.
 // Without a sink — dev SSR, a live production server — the wrapper is

@@ -15,6 +15,7 @@
     "@solidjs/prerender": "workspace:*",
     "@solidjs/router": "^2.0.0-next.21",
     "@solidjs/web": "^2.0.0-rc.6",
+    "prerender-crawler": "workspace:*",
     "solid-js": "^2.0.0-rc.6"
   },
   "devDependencies": {

@@ -10,8 +10,9 @@
 export const ARTIFACT_DIR = "_static";
 
 /**
- * The capture handshake: the prerender integration (vite plugin) installs a
- * sink under this registered symbol before the crawl and removes it after.
+ * The capture handshake: the prerender integration (`serverFunctions()`)
+ * installs a sink under this registered symbol before the crawl and removes
+ * it after.
  * `prerendered`'s server wrapper delivers every call it executes while
  * the sink is present. A registered symbol — not module state — because the
  * built server bundle and the plugin process must agree by construction.

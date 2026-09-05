@@ -1,13 +1,13 @@
 // The full prerendered-function story, without Vite: the server half
-// captures during a real prerender-core crawl (through the capture
+// captures during a real prerender-crawler crawl (through the capture
 // integration the plugin installs), artifacts land on disk, and the client
 // half — flipped to the static posture — reads them back, rich types
 // included.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runPrerender } from "prerender-core";
+import { runPrerender } from "prerender-crawler";
 import {
   createServerReference as createServerSideReference,
   getServerFunctionMetadata,
@@ -18,9 +18,8 @@ import { createRequestEvent } from "@solidjs/web";
 import { provideRequestEvent } from "@solidjs/web/storage";
 import { prerendered as prerenderedServer } from "../src/server.ts";
 import { prerendered as prerenderedClient } from "../src/client.ts";
-import { createCaptureIntegration } from "../src/vite.ts";
+import { serverFunctions } from "../src/integration.ts";
 import { CAPTURE_SINK, staticArtifactPath } from "../src/shared.ts";
-import { env } from "../src/env.ts";
 
 let ids = 0;
 const nextId = (label: string) => `test/prerendered.ts#${label}${ids++}`;
@@ -37,7 +36,12 @@ const globals = globalThis as { [CAPTURE_SINK]?: unknown };
 afterEach(() => {
   delete globals[CAPTURE_SINK];
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
+
+// the client half reads its posture from `import.meta.env.PRERENDER_MODE`,
+// the constant `prerender-crawler/vite` defines in a build
+const posture = (mode: "static" | "hybrid") => vi.stubEnv("PRERENDER_MODE", mode);
 
 describe("prerendered (server half)", () => {
   it("is call-through without a sink; with one, delivers identity + settled value", async () => {
@@ -83,7 +87,8 @@ describe("prerendered (server half)", () => {
 
 describe("prerendered (client half, live posture)", () => {
   it("degrades to a branded GET reference when no static artifacts exist", () => {
-    expect(env.staticArtifacts).toBe(false); // the default module answers live
+    // no plugin defined the constant: live
+    expect(import.meta.env?.PRERENDER_MODE).toBeUndefined();
     const id = nextId("live");
     const ref = prerenderedClient(createClientReference(id));
     const meta = getServerFunctionMetadata(ref as unknown as (...args: unknown[]) => unknown);
@@ -94,14 +99,8 @@ describe("prerendered (client half, live posture)", () => {
 });
 
 describe("prerendered (client half, hybrid posture)", () => {
-  afterEach(() => {
-    env.staticArtifacts = false;
-    env.fallback = true;
-  });
-
   it("falls back to live GET dispatch on an artifact miss", async () => {
-    env.staticArtifacts = true;
-    env.fallback = true; // hybrid: a server exists
+    posture("hybrid"); // a server exists
     const id = nextId("hybridMiss");
     const requested: string[] = [];
     vi.stubGlobal("fetch", async (url: string | URL | Request) => {
@@ -123,8 +122,7 @@ describe("prerendered (client half, hybrid posture)", () => {
   });
 
   it("errors on a miss in the static posture (no fallback)", async () => {
-    env.staticArtifacts = true;
-    env.fallback = false; // static: nobody to fall back to
+    posture("static"); // nobody to fall back to
     vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
     const ref = prerenderedClient(createClientReference(nextId("staticMiss")));
     await expect(ref("unseen")).rejects.toThrow(/No static artifact/);
@@ -137,8 +135,6 @@ describe("static round trip through a prerender run", () => {
     outDir = await mkdtemp(join(tmpdir(), "solid-prerender-"));
   });
   afterEach(async () => {
-    env.staticArtifacts = false;
-    env.fallback = true;
     await rm(outDir, { recursive: true, force: true });
   });
 
@@ -168,7 +164,7 @@ describe("static round trip through a prerender run", () => {
       transport,
       outDir,
       crawlLinks: false,
-      integrations: [createCaptureIntegration()]
+      integrations: [serverFunctions()]
     });
     expect(result.pages).toHaveLength(1);
     expect(result.files.map(f => f.filename).sort()).toEqual(
@@ -189,8 +185,7 @@ describe("static round trip through a prerender run", () => {
 
     // ---- the client, in the STATIC posture (no fallback server), against
     // the written files ----
-    env.staticArtifacts = true;
-    env.fallback = false;
+    posture("static");
     vi.stubGlobal("fetch", async (url: string | URL) => {
       const pathname = new URL(String(url), "http://localhost").pathname;
       try {
@@ -230,11 +225,112 @@ describe("static round trip through a prerender run", () => {
     const result = await runPrerender({
       transport,
       outDir,
-      integrations: [createCaptureIntegration()]
+      integrations: [serverFunctions()]
     });
     expect(result.files).toHaveLength(2);
     expect(result.files.map(f => f.filename).sort()).toEqual(
       [await staticArtifactPath(id, ["a"]), await staticArtifactPath(id, ["b"])].sort()
     );
+  });
+});
+
+describe("the static-mode guard", () => {
+  let outDir: string;
+  beforeEach(async () => {
+    outDir = await mkdtemp(join(tmpdir(), "solid-prerender-"));
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(outDir, { recursive: true, force: true });
+  });
+
+  /** What @solidjs/vite-plugin's client build leaves behind. */
+  async function writeManifest(functions: Array<{ id: string; name: string; module: string }>) {
+    await mkdir(join(outDir, ".vite"), { recursive: true });
+    await writeFile(
+      join(outDir, ".vite/solid-server-functions.json"),
+      JSON.stringify({ modules: ["src/data.ts"], functions })
+    );
+  }
+
+  /** A one-page site whose render performs exactly the given prerendered calls. */
+  const siteCalling = (calls: () => Promise<unknown>) => ({
+    async fetch() {
+      await withEvent(calls);
+      return new Response("<html></html>", { headers: { "content-type": "text/html" } });
+    }
+  });
+
+  it("fails a static run naming client-reachable functions nothing captured", async () => {
+    const calledId = nextId("called");
+    const called = declare(calledId, async () => 1);
+    await writeManifest([
+      { id: calledId, name: "called", module: "src/data.ts" },
+      { id: "getLive-deadbeef", name: "getLive", module: "src/data.ts" }
+    ]);
+    await expect(
+      runPrerender({
+        transport: siteCalling(() => called()),
+        outDir,
+        crawlLinks: false,
+        integrations: [serverFunctions()]
+      })
+    ).rejects.toThrow(/never captured[\s\S]*getLive \(getLive-deadbeef, src\/data\.ts\)/);
+  });
+
+  it("passes when everything reachable was captured, and stays quiet in hybrid mode", async () => {
+    const id = nextId("covered");
+    const covered = declare(id, async () => 1);
+    await writeManifest([
+      { id, name: "covered", module: "src/data.ts" },
+      { id: "getLive-deadbeef", name: "getLive", module: "src/data.ts" }
+    ]);
+    // hybrid: a server answers the uncaptured call, nothing to guard
+    const hybrid = await runPrerender({
+      transport: siteCalling(() => covered()),
+      outDir,
+      mode: "hybrid",
+      crawlLinks: false,
+      integrations: [serverFunctions()]
+    });
+    expect(hybrid.files).toHaveLength(1);
+
+    // static, fully covered
+    await writeManifest([{ id, name: "covered", module: "src/data.ts" }]);
+    const covering = await runPrerender({
+      transport: siteCalling(() => covered()),
+      outDir,
+      crawlLinks: false,
+      integrations: [serverFunctions()]
+    });
+    expect(covering.files).toHaveLength(1);
+  });
+
+  it("downgrades to a warning on request, and warns once on a legacy manifest", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeManifest([{ id: "getLive-deadbeef", name: "getLive", module: "src/data.ts" }]);
+    await runPrerender({
+      transport: siteCalling(async () => {}),
+      outDir,
+      crawlLinks: false,
+      integrations: [serverFunctions({ uncaptured: "warn" })]
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/getLive-deadbeef/);
+
+    // the pre-ids manifest shape: the guard says why it cannot check
+    warn.mockClear();
+    await writeFile(
+      join(outDir, ".vite/solid-server-functions.json"),
+      JSON.stringify(["src/data.ts"])
+    );
+    await runPrerender({
+      transport: siteCalling(async () => {}),
+      outDir,
+      crawlLinks: false,
+      integrations: [serverFunctions()]
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/carries no function ids/);
   });
 });

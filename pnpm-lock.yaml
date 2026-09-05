@@ -29,6 +29,9 @@ importers:
       '@solidjs/web':
         specifier: ^2.0.0-rc.6
         version: 2.0.0-rc.6(solid-js@2.0.0-rc.6)
+      prerender-crawler:
+        specifier: workspace:*
+        version: link:../../packages/crawler
       solid-js:
         specifier: ^2.0.0-rc.6
         version: 2.0.0-rc.6
@@ -46,14 +49,20 @@ importers:
         specifier: ^8.1.5
         version: 8.2.2(@types/node@22.20.1)(esbuild@0.27.7)
 
-  packages/core:
+  packages/crawler:
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
+      filesystem-routing:
+        specifier: 0.2.1
+        version: 0.2.1(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
+      vite:
+        specifier: ^8.0.0
+        version: 8.2.2(@types/node@22.20.1)(esbuild@0.27.7)
       vitest:
         specifier: ^4.0.0
         version: 4.1.11(@types/node@22.20.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))
@@ -66,12 +75,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
-      filesystem-routing:
-        specifier: 0.2.1
-        version: 0.2.1(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))
-      prerender-core:
-        specifier: workspace:*
-        version: link:../core
+      prerender-crawler:
+        specifier: workspace:^
+        version: link:../crawler
       solid-js:
         specifier: ^2.0.0-rc.6
         version: 2.0.0-rc.6
@@ -81,9 +87,6 @@ importers:
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
-      vite:
-        specifier: ^8.0.0
-        version: 8.2.2(@types/node@22.20.1)(esbuild@0.27.7)
       vitest:
         specifier: ^4.0.0
         version: 4.1.11(@types/node@22.20.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7))

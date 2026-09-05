@@ -69,11 +69,25 @@ export interface EmittedFile {
 }
 
 /**
+ * What the output is for. The distinction every policy downstream keys on:
+ *
+ * - `"static"`: the written files ARE the deployment (SSG). Every rendered
+ *   page is written; anything the crawl did not produce does not exist at
+ *   runtime, so integrations treat gaps as errors.
+ * - `"hybrid"`: a live server is deployed alongside. The crawl is a
+ *   build-time pass (data baking, selected pages); rendered pages are not
+ *   written by default because a static HTML file shadows live SSR of the
+ *   same route on most hosts, and gaps fall back to the server.
+ */
+export type PrerenderMode = "static" | "hybrid";
+
+/**
  * The context integrations set up against. `emitFile` is the channel for
  * artifacts produced during the crawl (payload extraction, captured
  * server-function results): queued during the run, written with the pages.
  */
 export interface PrerenderContext {
+  mode: PrerenderMode;
   origin: string;
   outDir: string;
   emitFile(file: EmittedFile): void;
@@ -84,11 +98,25 @@ export interface PrerenderIntegration {
   name: string;
   /** Before the first page renders. */
   setup?(context: PrerenderContext): void | Promise<void>;
-  /** After the last page rendered, before the run resolves. */
+  /**
+   * After the last page rendered, before any file is written. Throwing
+   * here fails the run — the place for an integration to verify the crawl
+   * produced everything its runtime half will need.
+   */
   teardown?(context: PrerenderContext): void | Promise<void>;
+  /**
+   * A module specifier the bundler integration imports for side effects
+   * into the CLIENT build when this integration is active — how an
+   * integration ships runtime behavior (a transport interceptor, a
+   * posture switch) without the app wiring it by hand. Not consumed by the
+   * engine itself; reserved for bundler plugins built on it.
+   */
+  client?: string;
 }
 
 export interface PrerenderOptions {
+  /** See `PrerenderMode`. Decides the `emitPages` default. @default "static" */
+  mode?: PrerenderMode;
   /** Seed pages. @default ["/"] */
   pages?: PagesSource;
   /**
@@ -134,7 +162,7 @@ export interface PrerenderOptions {
    * just produces no HTML file. Turn this off (or scope it) when a live
    * server keeps serving the crawled routes: a written HTML file is served
    * ahead of SSR by most hosts, freezing the route.
-   * @default true
+   * @default true in `static` mode, false in `hybrid`
    */
   emitPages?: boolean | ((path: string) => boolean);
   /** `/about` -> `about/index.html` (true) or `about.html` (false). @default true */

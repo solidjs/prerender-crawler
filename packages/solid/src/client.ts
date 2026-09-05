@@ -1,14 +1,16 @@
 // Client half of `prerendered`. What a prerendered reference does in the
-// browser depends on the build posture (see ./env.ts):
+// browser depends on the build's posture, read from `import.meta.env`:
 //
-// - live posture (dev server, or a build without the prerender plugin):
-//   the reference is an ordinary GET-declared server function — calls
-//   dispatch over HTTP to a live server. The app degrades to a
-//   live-server deployment; nothing breaks, nothing is static.
-// - static posture (built with the prerender plugin): calls never reach a
-//   server. The call's artifact key is derived from (id, arguments) —
-//   the same derivation the build performed — and the payload is fetched
-//   from `_static/` as an ordinary cacheable file.
+// - live (no `PRERENDER_MODE`: the dev server, or a build without the
+//   prerender plugin): the reference is an ordinary GET-declared server
+//   function — calls dispatch over HTTP to a live server. The app degrades
+//   to a live-server deployment; nothing breaks, nothing is static.
+// - `"static"` / `"hybrid"` (built with `prerender()` from
+//   `prerender-crawler/vite`, which defines the constant): the call's artifact
+//   key is derived from (id, arguments) — the same derivation the build
+//   performed — and the payload is fetched from `_static/` as an ordinary
+//   cacheable file. On a miss, hybrid falls back to the live call (a server
+//   is deployed); static has nobody to fall back to and throws.
 import {
   GET,
   SERVER_FUNCTION_INVOKE,
@@ -18,12 +20,6 @@ import {
   isServerFunction,
   withMeta
 } from "@solidjs/web/server-functions/client";
-// Imported by its PUBLIC name, on purpose: this self-referencing specifier
-// (resolved through package.json `exports` — dist/env.js, the live-posture
-// default) is the exact id the prerender plugin intercepts in the client
-// environment to swap in the static posture. A relative import would be
-// bundled into this package's chunk graph and the swap would never fire.
-import { env } from "@solidjs/prerender/env";
 import { PRERENDERED_META_KEY, staticArtifactPath } from "./shared.ts";
 import type { PrerenderedFunction } from "./shared.ts";
 
@@ -35,6 +31,25 @@ export type { PrerenderedFunction } from "./shared.ts";
 // references like any other declaration wrapper's
 const SERVER_FUNCTION_METADATA = Symbol.for("solid.ServerFunctionMetadata");
 
+/** The build posture, as `prerender-crawler/vite` defined it — or live when it did not. */
+interface Posture {
+  mode: "static" | "hybrid" | undefined;
+  base: string;
+}
+
+// Read at call time, not module scope: a build replaces both expressions
+// with constants, and a test may stub the env between calls. The direct
+// `import.meta.env` spelling matters — it is what Vite's define and
+// vitest's env stubbing both target; an indirection hides it from them.
+function posture(): Posture {
+  const env = import.meta.env;
+  const mode = env?.PRERENDER_MODE;
+  return {
+    mode: mode === "static" || mode === "hybrid" ? mode : undefined,
+    base: typeof env?.BASE_URL === "string" ? env.BASE_URL : "/"
+  };
+}
+
 /**
  * Declares a server function PRERENDERED: it runs at build time, during
  * prerendering, and each call's result is captured as a static JSON
@@ -44,24 +59,25 @@ const SERVER_FUNCTION_METADATA = Symbol.for("solid.ServerFunctionMetadata");
  * runtime server at all.
  *
  * The declaration implies `GET`: a prerendered call is by definition a
- * safe read (its result is baked into the build), and outside the static
- * posture — the dev server, or a build without the prerender plugin — the
- * reference behaves exactly like `GET(fn)`, so the app still works
- * against a live server.
+ * safe read (its result is baked into the build), and outside a
+ * prerendered build — the dev server, or a build without the prerender
+ * plugin — the reference behaves exactly like `GET(fn)`, so the app still
+ * works against a live server.
  *
  * Arguments must be JSON-safe: they are the call's ADDRESS (both the
  * build and the client derive the artifact key from them), so they must
  * spell identically in both realms. Results are unrestricted — rich values
  * (Dates, Maps, typed errors) ride the codec into the artifact.
  *
- * Only calls that actually happen during prerendering have artifacts: a
- * production client calling with arguments no prerendered page used gets
- * a rejected call (there is no server to fall back to).
+ * Only calls that actually happen during prerendering have artifacts. In a
+ * static build, a client calling with arguments no prerendered page used
+ * gets a rejected call (there is no server to fall back to); in a hybrid
+ * build the call falls back to the live server.
  *
  * ```ts
  * export const getPosts = prerendered(async (tag: string) => {
  *   "use server";
- *   return db.posts.byTag(tag); // runs at build time in the static posture
+ *   return db.posts.byTag(tag); // runs at build time in a prerendered build
  * });
  * ```
  */
@@ -71,30 +87,30 @@ export function prerendered<A extends readonly unknown[], R>(
   if (!isServerFunction(fn)) {
     throw new Error("prerendered expects a server function reference");
   }
-  // GET is the live fallback and the wire posture outside static builds;
-  // an already-GET-declared reference is adopted as-is.
+  // GET is the live fallback and the wire posture outside prerendered
+  // builds; an already-GET-declared reference is adopted as-is.
   const source: any =
     getServerFunctionMetadata(fn)?.method === "GET" ? fn : GET(fn as (...args: any[]) => any);
 
-  if (!env.staticArtifacts) {
+  if (posture().mode === undefined) {
     // live posture: the reference IS the GET reference, branded so
     // integrations can still detect the declaration
-    return withMeta(source, { [PRERENDERED_META_KEY]: true }) as PrerenderedFunction<
-      A,
-      Awaited<R>
-    >;
+    return withMeta(source, { [PRERENDERED_META_KEY]: true }) as PrerenderedFunction<A, Awaited<R>>;
   }
 
   const id: string = source.id;
   const run = async (args: A, options?: { signal?: AbortSignal }) => {
+    const { mode, base } = posture();
     const path = await staticArtifactPath(id, args);
-    const url = env.base.endsWith("/") ? env.base + path : `${env.base}/${path}`;
+    const url = base.endsWith("/") ? base + path : `${base}/${path}`;
     const response = await fetch(url, options?.signal ? { signal: options.signal } : undefined);
     if (!response.ok) {
-      // hybrid mode deployed a live server: a call the build never made is
-      // an ordinary GET dispatch, not a failure — artifact-first, live
-      // fallback. Static mode has nobody to fall back to.
-      if (env.fallback) return source[SERVER_FUNCTION_INVOKE](args, options) as Promise<Awaited<R>>;
+      // hybrid deployed a live server: a call the build never made is an
+      // ordinary GET dispatch, not a failure — artifact-first, live
+      // fallback. Static has nobody to fall back to.
+      if (mode === "hybrid") {
+        return source[SERVER_FUNCTION_INVOKE](args, options) as Promise<Awaited<R>>;
+      }
       throw new Error(
         `No static artifact for this call of "${id}" (${response.status} at ${url}): only calls ` +
           `made during prerendering are captured. Prerender a page that performs this call ` +
@@ -119,7 +135,7 @@ export function prerendered<A extends readonly unknown[], R>(
   wrapped[SERVER_FUNCTION_INVOKE] = run;
   wrapped.id = id;
   // lazy, like the runtime's own references: the endpoint may be configured
-  // after module scope runs — and in the static posture it names the live
+  // after module scope runs — and in a prerendered build it names the live
   // address the artifact stands in for
   Object.defineProperty(wrapped, "url", { get: () => source.url, configurable: true });
   return wrapped as PrerenderedFunction<A, Awaited<R>>;

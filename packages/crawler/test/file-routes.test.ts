@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { fileRoutePages, hasFileSystemRouting, staticRoutePaths } from "../src/file-routes.ts";
 
+// filesystem-routing is an optional peer resolved from the PROJECT root at
+// runtime; here it is this package's devDependency, reached by the fallback.
+
 describe("staticRoutePaths", () => {
   it("keeps concrete pages, drops dynamic ones, strips groups, dedupes", () => {
     const paths = staticRoutePaths([

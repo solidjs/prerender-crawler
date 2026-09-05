@@ -44,6 +44,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
   const {
     transport,
     outDir,
+    mode = "static",
     crawlLinks = true,
     hintHeader = "x-prerender",
     filter,
@@ -53,7 +54,8 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     retryDelay = 500,
     failOnError = true,
     maxRedirects = 5,
-    emitPages = true,
+    // hybrid's crawl bakes data; writing its HTML would shadow live SSR
+    emitPages = mode === "static",
     autoSubfolderIndex = true,
     origin = "http://localhost",
     onRendered,
@@ -65,6 +67,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
   const skipped: PrerenderResult["skipped"] = [];
   const emitted: EmittedFile[] = [];
   const context: PrerenderContext = {
+    mode,
     origin,
     outDir,
     emitFile: file => void emitted.push(file)

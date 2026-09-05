@@ -8,9 +8,6 @@
     "noEmit": true,
     "isolatedModules": true,
     "allowImportingTsExtensions": true,
-    "paths": {
-      "@solidjs/prerender/env": ["./src/env.ts"]
-    },
     "skipLibCheck": true
   },
   "include": ["./src", "./test"],

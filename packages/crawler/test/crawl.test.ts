@@ -156,7 +156,7 @@ describe("crawl", () => {
     expect(await readFile(join(outDir, "moved/index.html"), "utf8")).toBe("landed");
     // the external redirect became a meta-refresh stub
     const stub = await readFile(join(outDir, "gone/index.html"), "utf8");
-    expect(stub).toContain('url=https://elsewhere.example/x');
+    expect(stub).toContain("url=https://elsewhere.example/x");
   });
 
   it("bounds redirect chains", async () => {
@@ -193,8 +193,7 @@ describe("crawl", () => {
   });
 
   it("fails the run on a broken page by default, or records it when opted out", async () => {
-    const broken = () =>
-      site({ "/": html(`<a href="/missing">m</a>`) });
+    const broken = () => site({ "/": html(`<a href="/missing">m</a>`) });
 
     await expect(
       runPrerender({ transport: broken().transport, outDir: await makeOutDir(), retries: 0 })
@@ -256,7 +255,10 @@ describe("crawl", () => {
       ["/kept", true]
     ]);
     // only the opted-in page left a file
-    expect(await readdir(outDir, { recursive: true })).toEqual(["kept", join("kept", "index.html")]);
+    expect(await readdir(outDir, { recursive: true })).toEqual([
+      "kept",
+      join("kept", "index.html")
+    ]);
   });
 
   it("accepts a per-path emission predicate", async () => {
@@ -311,7 +313,12 @@ describe("crawl", () => {
     expect(String(result.skipped[0].error)).toMatch(/answered 404 \(linked from \//);
 
     // and the thrown form carries the same provenance, keeping the cause
-    const broken = site({ "/": html(`<a href="/boom">b</a>`), "/boom": () => { throw new Error("kaboom"); } });
+    const broken = site({
+      "/": html(`<a href="/boom">b</a>`),
+      "/boom": () => {
+        throw new Error("kaboom");
+      }
+    });
     await expect(
       runPrerender({ transport: broken.transport, outDir: await makeOutDir(), retries: 0 })
     ).rejects.toMatchObject({

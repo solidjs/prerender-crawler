@@ -8,6 +8,7 @@ export type {
   PagesSource,
   PrerenderContext,
   PrerenderIntegration,
+  PrerenderMode,
   PrerenderOptions,
   PrerenderResult,
   RenderedPage,
