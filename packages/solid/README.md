@@ -45,6 +45,22 @@ export const getPost = query(
 
 Design pages so the crawl exercises the calls the site needs — which happens naturally when pages link to what they use.
 
+## `announceRoutes(router)`
+
+The crawl follows links; a page nothing links to needs announcing. Call this in the app root during render with the `createRouter` instance (or a route-definition tree, with `{ base }`):
+
+```tsx
+import { announceRoutes } from "@solidjs/prerender";
+import { Router } from "./router";
+
+export default function App() {
+  announceRoutes(Router);
+  return <Router>{props => props.children}</Router>;
+}
+```
+
+On the server, when the request is the crawler's, the router's static pages go on the response's hint header and the crawl seeds every one of them. A visitor's response is untouched; in the browser it is a no-op. Dynamic routes (`/posts/:id`) are not announced — only a render knows their values; the crawl finds them by their links. Options: `header` (a custom crawl `hintHeader`), `base`.
+
 ## `serverFunctions(options?)`
 
 The integration has two jobs.
