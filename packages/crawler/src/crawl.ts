@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { extractLinks, normalizeLink, normalizePath } from "./links.ts";
+import { dirname, resolve } from "node:path";
+import { extractLinks, normalizeLink, normalizeRoute, splitRoute } from "./links.ts";
+import type { LinkOptions } from "./links.ts";
 import { outputFilename } from "./output.ts";
 import type {
   EmittedFile,
@@ -20,16 +21,22 @@ export interface RunOptions extends PrerenderOptions {
 
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-async function resolveSeeds(pages: PrerenderOptions["pages"]): Promise<PageEntry[]> {
+async function resolveSeeds(
+  pages: PrerenderOptions["pages"],
+  origin: URL,
+  links: LinkOptions
+): Promise<PageEntry[]> {
   const source = typeof pages === "function" ? await pages() : (pages ?? ["/"]);
-  // Seed sources overlap routinely (an explicit list plus a route-manifest
-  // scan both naming `/`): one render per path, the first spelling wins.
+  // Seeds are spelled by people and route manifests — `about/`, `/a#top`,
+  // `/posts?page=2` — and get the same normalization a crawled link does,
+  // so a seed and a link to the same page meet in one queue entry. Seed
+  // sources overlap routinely (an explicit list plus a route-manifest scan
+  // both naming `/`): one render per path, the first spelling wins.
   const byPath = new Map<string, PageEntry>();
   for (const entry of source) {
-    const page =
-      typeof entry === "string"
-        ? { path: normalizePath(entry) }
-        : { ...entry, path: normalizePath(entry.path) };
+    const spelled = typeof entry === "string" ? entry : entry.path;
+    const path = normalizeRoute(new URL(spelled, origin), links);
+    const page = typeof entry === "string" ? { path } : { ...entry, path };
     if (!byPath.has(page.path)) byPath.set(page.path, page);
   }
   return [...byPath.values()];
@@ -49,6 +56,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     crawlLinks = true,
     hintHeader = "x-prerender",
     filter,
+    keepQuery = false,
     concurrency = 8,
     interval = 0,
     retries = 2,
@@ -66,6 +74,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
   } = options;
 
   const originUrl = new URL(origin);
+  const links: LinkOptions = { keepQuery };
   const rendered: RenderedPage[] = [];
   const redirects: RedirectRecord[] = [];
   const skipped: PrerenderResult["skipped"] = [];
@@ -76,12 +85,19 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     outDir,
     pages: rendered,
     redirects,
+    skipped,
+    files: emitted,
     emitFile: file => void emitted.push(file)
   };
-  const shouldEmit = (entry: PageEntry) =>
-    entry.emit ?? (typeof emitPages === "function" ? emitPages(entry.path) : emitPages);
+  // A query spelling without a filename of its own has nowhere correct to
+  // go: `posts/index.html` is `/posts`, and a static host serves it for
+  // every query. It renders (data, links) and leaves no file.
+  const shouldEmit = (entry: PageEntry) => {
+    if (!entry.filename && entry.path.includes("?")) return false;
+    return entry.emit ?? (typeof emitPages === "function" ? emitPages(entry.path) : emitPages);
+  };
 
-  const seeds = await resolveSeeds(options.pages);
+  const seeds = await resolveSeeds(options.pages, originUrl, links);
   const seen = new Set(seeds.map(page => page.path));
   const queue: PageEntry[] = [...seeds];
   // Provenance: which pages named each discovered path. Recorded for every
@@ -131,43 +147,50 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
   // rendered once, at its own URL, and a chain is one record per hop the
   // way a host's redirect rules would spell it. Cycles are harmless: the
   // seen-set admits each path once.
-  async function fetchUrl(url: URL): Promise<Response> {
+  // `started` is taken after pacing: a page's duration is its own, not the
+  // throttle's.
+  async function fetchUrl(url: URL): Promise<Fetched> {
     await pace();
-    return transport.fetch(
+    const started = performance.now();
+    const response = await transport.fetch(
       new Request(url, { headers: { accept: "text/html,*/*", [hintHeader]: "1" } })
     );
+    return { response, started };
   }
 
   // A redirect to a spelling of the SAME page (`/posts` -> `/posts/`, the
   // trailing-slash canonicalization static servers do) is not a redirect
   // between pages: it is followed here, once, and the page renders as
   // itself. Anything else is the caller's to record.
-  async function fetchPage(path: string): Promise<Response> {
+  async function fetchPage(path: string): Promise<Fetched> {
     const url = new URL(path, originUrl);
-    const response = await fetchUrl(url);
+    const fetched = await fetchUrl(url);
+    const { response } = fetched;
     const location = response.headers.get("location");
-    if (!location || response.status < 300 || response.status >= 400) return response;
+    if (!location || response.status < 300 || response.status >= 400) return fetched;
     const target = new URL(location, url);
-    if (target.origin !== originUrl.origin || normalizePath(target.pathname) !== path) {
-      return response;
+    if (target.origin !== originUrl.origin || normalizeRoute(target, links) !== path) {
+      return fetched;
     }
-    return fetchUrl(target);
+    return { ...(await fetchUrl(target)), started: fetched.started };
   }
 
   const pendingRedirects: Array<{
     entry: PageEntry;
     filename: string;
     response: Response;
+    duration: number;
     redirect: RedirectRecord;
   }> = [];
 
   async function renderPage(entry: PageEntry): Promise<void> {
     let response: Response | undefined;
+    let started = 0;
     let error: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
       if (attempt > 0) await wait(retryDelay);
       try {
-        response = await fetchPage(entry.path);
+        ({ response, started } = await fetchPage(entry.path));
         error = undefined;
         if (response.status < 500) break; // retry only what might heal
       } catch (thrown) {
@@ -192,11 +215,12 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
       return;
     }
 
-    const filename = entry.filename ?? outputFilename(entry.path, autoSubfolderIndex);
+    const filename =
+      entry.filename ?? outputFilename(splitRoute(entry.path).pathname, autoSubfolderIndex);
     const hints = response.headers.get(hintHeader);
     if (hints) {
       for (const hint of hints.split(",")) {
-        const path = normalizeLink(hint.trim(), originUrl, originUrl.origin);
+        const path = normalizeLink(hint.trim(), originUrl, originUrl.origin, links);
         if (path !== undefined) discovered(path, entry.path);
       }
     }
@@ -206,16 +230,18 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
       const pageUrl = new URL(entry.path, originUrl);
       const target = new URL(location, pageUrl);
       const internal = target.origin === originUrl.origin;
-      const to = internal ? normalizePath(target.pathname) : target.href;
+      const to = internal ? normalizeRoute(target, links) : target.href;
       const redirect: RedirectRecord = { from: entry.path, to, status: response.status };
       redirects.push(redirect);
       if (internal) discovered(to, entry.path);
       // the stub needs the chain's end, known only once the crawl settles
-      pendingRedirects.push({ entry, filename, response, redirect });
+      const duration = performance.now() - started;
+      pendingRedirects.push({ entry, filename, response, duration, redirect });
       return;
     }
 
     const html = await response.text();
+    const duration = performance.now() - started;
     // Emission is policy, rendering is not: an unemitted page has still
     // fully executed (integration capture happened server-side) and its
     // links still feed the crawl — it just leaves no HTML file behind to
@@ -225,7 +251,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
 
     if (crawlLinks && (response.headers.get("content-type") ?? "").includes("text/html")) {
       const pageUrl = new URL(entry.path, originUrl);
-      for (const path of extractLinks(html, pageUrl)) discovered(path, entry.path);
+      for (const path of extractLinks(html, pageUrl, links)) discovered(path, entry.path);
     }
 
     const page: RenderedPage = {
@@ -234,6 +260,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
       filename,
       emitted,
       response,
+      duration,
       html
     };
     rendered.push(page);
@@ -257,7 +284,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
       }
       return at;
     };
-    for (const { entry, filename, response, redirect } of pendingRedirects) {
+    for (const { entry, filename, response, duration, redirect } of pendingRedirects) {
       const html = redirectStub(destination(entry.path));
       const emitted = redirectStubs && shouldEmit(entry);
       if (emitted) await writeOutput(outDir, filename, html);
@@ -267,6 +294,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
         filename,
         emitted,
         response,
+        duration,
         html,
         redirect
       };
@@ -320,6 +348,12 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
   return { pages: rendered, redirects, files: emitted, skipped };
 }
 
+interface Fetched {
+  response: Response;
+  /** `performance.now()` at the request's start, pacing excluded. */
+  started: number;
+}
+
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 function redirectStub(location: string): string {
@@ -328,7 +362,7 @@ function redirectStub(location: string): string {
 }
 
 async function writeOutput(outDir: string, filename: string, contents: string | Uint8Array) {
-  const target = join(outDir, filename);
+  const target = resolve(outDir, filename);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, contents);
 }

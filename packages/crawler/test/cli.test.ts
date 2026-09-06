@@ -121,6 +121,47 @@ describe("cli", () => {
     expect(lenient.err[0]).toMatch(/skipped \/missing/);
   });
 
+  it("writes a sitemap and a report when asked, and validates the sitemap origin", async () => {
+    const server = join(dir, "server-seo.mjs");
+    await writeFile(
+      server,
+      `export default { fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/") return new Response('<a href="/about">a</a>', { headers: { "content-type": "text/html" } });
+        if (path === "/about") return new Response("<h1>about</h1>", { headers: { "content-type": "text/html" } });
+        return new Response("nope", { status: 404 });
+      } }`
+    );
+    outDir = join(dir, "out-seo");
+    const run = io();
+    const code = await main(
+      [
+        server,
+        "--out",
+        outDir,
+        "--sitemap",
+        "https://example.com",
+        "--report-file",
+        "../seo-report.json"
+      ],
+      run.io
+    );
+    expect(run.err).toEqual([]);
+    expect(code).toBe(0);
+    expect(run.out[0]).toMatch(/rendered 2 page\(s\) \(2 written\), 2 file\(s\) emitted/);
+    expect((await readdir(outDir)).sort()).toEqual(["about", "index.html", "sitemap.xml"]);
+    expect(await readFile(join(outDir, "sitemap.xml"), "utf8")).toContain(
+      "<loc>https://example.com/about</loc>"
+    );
+    const summary = JSON.parse(await readFile(join(dir, "seo-report.json"), "utf8"));
+    expect(summary.totals).toMatchObject({ pages: 2, written: 2, files: 1 });
+    expect(summary.files).toEqual(["sitemap.xml"]);
+
+    const bad = io();
+    expect(await main([server, "--out", outDir, "--sitemap", "example.com"], bad.io)).toBe(2);
+    expect(bad.err[0]).toMatch(/--sitemap needs/);
+  });
+
   it("rejects a non-integer numeric option", async () => {
     const run = io();
     const server = join(dir, "ok.mjs");

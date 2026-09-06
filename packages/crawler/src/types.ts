@@ -70,6 +70,8 @@ export interface RenderedPage {
   emitted: boolean;
   /** The response the transport answered with (body consumed). */
   response: Response;
+  /** Milliseconds from the request's start to its body fully read (the successful attempt). */
+  duration: number;
   /**
    * The rendered HTML — or, for a redirected path, the meta-refresh stub
    * that stands in for it (see `redirect`).
@@ -116,6 +118,15 @@ export interface PrerenderContext {
   pages: readonly RenderedPage[];
   /** Every redirect observed so far — complete by `teardown`. Live view; do not mutate. */
   redirects: readonly RedirectRecord[];
+  /** Pages that failed and were skipped (`failOnError: false`) — complete by `teardown`. */
+  skipped: readonly SkippedPage[];
+  /** Files emitted so far by integrations — those before this one, at `teardown`. */
+  files: readonly EmittedFile[];
+  /**
+   * Queues a file to be written with the pages. `filename` is resolved
+   * against the output directory; a `../` or absolute path lands outside
+   * it (a build report that should not deploy, say).
+   */
   emitFile(file: EmittedFile): void;
 }
 
@@ -167,6 +178,18 @@ export interface PrerenderOptions {
   hintHeader?: string;
   /** Drops a discovered path before it is fetched. */
   filter?(path: string): boolean;
+  /**
+   * Treat `/posts?page=2` as a page distinct from `/posts`. Off, the query
+   * is stripped everywhere and one render stands for every spelling. On,
+   * each query spelling renders separately — its links are followed and
+   * its data captured — but is written only when its entry names a
+   * `filename`: a static host serves a path the same regardless of query,
+   * so there is nothing correct to write by default. Meant for hybrid
+   * builds baking per-query data, and for sites that map queries to
+   * files themselves.
+   * @default false
+   */
+  keepQuery?: boolean;
   /** Pages in flight at once. @default 8 */
   concurrency?: number;
   /**

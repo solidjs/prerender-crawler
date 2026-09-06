@@ -35,6 +35,15 @@ export { fileRoutePages, staticRoutePaths } from "./file-routes.ts";
 export type { FileRoutePagesOptions, RouteEntryLike } from "./file-routes.ts";
 export { redirects } from "./redirects.ts";
 export type { RedirectsIntegrationOptions } from "./redirects.ts";
+export { report } from "./report.ts";
+export type {
+  PrerenderReport,
+  ReportIntegrationOptions,
+  ReportPage,
+  ReportSkip
+} from "./report.ts";
+export { sitemap } from "./sitemap.ts";
+export type { SitemapChangeFrequency, SitemapEntry, SitemapIntegrationOptions } from "./sitemap.ts";
 export type * from "./types.ts";
 
 /** The `import.meta.env` key the plugin defines with the build's `PrerenderMode`. */
