@@ -24,15 +24,17 @@
 //    seed the crawl automatically, so a page nothing links to still builds.
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { Plugin } from "vite";
 import { runPrerender } from "./crawl.ts";
 import { fileRoutePages, hasFileSystemRouting } from "./file-routes.ts";
 import type { FileRoutePagesOptions } from "./file-routes.ts";
+import { moduleTransport } from "./transports.ts";
 import type { PageEntry, PrerenderOptions } from "./types.ts";
 
 export { fileRoutePages, staticRoutePaths } from "./file-routes.ts";
 export type { FileRoutePagesOptions, RouteEntryLike } from "./file-routes.ts";
+export { redirects } from "./redirects.ts";
+export type { RedirectsIntegrationOptions } from "./redirects.ts";
 export type * from "./types.ts";
 
 /** The `import.meta.env` key the plugin defines with the build's `PrerenderMode`. */
@@ -110,7 +112,17 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
           ? path.resolve(root, options.serverEntry)
           : path.join(ssrOut, "server.js");
 
-        const handleRequest = await loadHandler(entry);
+        let transport;
+        try {
+          transport = await moduleTransport(entry);
+        } catch (error) {
+          throw new Error(
+            `${describe(error)} Prerendering renders pages through the server build — make ` +
+              `sure an SSR build runs (the server build is a build-time tool here; it need not ` +
+              `be deployed) or point \`serverEntry\` at the module.`,
+            { cause: error }
+          );
+        }
         const routeSeeds = await fileRouteSeeds(root, options.fileRoutes);
         const { serverEntry: _entry, fileRoutes: _fileRoutes, pages, ...crawl } = options;
         const result = await runPrerender({
@@ -120,15 +132,18 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
             ...(typeof pages === "function" ? await pages() : (pages ?? ["/"])),
             ...routeSeeds
           ],
-          transport: { fetch: request => handleRequest(request) },
+          transport,
           outDir: clientOut
         });
 
         const written = result.pages.filter(page => page.emitted).length;
         const seeded = routeSeeds.length ? `, ${routeSeeds.length} seeded from file routes` : "";
+        const redirected = result.redirects.length
+          ? `, ${result.redirects.length} redirect(s)`
+          : "";
         logger.info(
-          `[prerender] rendered ${result.pages.length} page(s) (${written} written${seeded}), ` +
-            `${result.files.length} file(s) emitted -> ${path.relative(root, clientOut)}`
+          `[prerender] rendered ${result.pages.length} page(s) (${written} written${seeded})` +
+            `${redirected}, ${result.files.length} file(s) emitted -> ${path.relative(root, clientOut)}`
         );
         for (const miss of result.skipped) {
           logger.warn(`[prerender] skipped ${miss.path}: ${describe(miss.error)}`);
@@ -136,34 +151,6 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
       }
     }
   };
-}
-
-type Handler = (request: Request) => Promise<Response>;
-
-async function loadHandler(entry: string): Promise<Handler> {
-  let serverModule: Record<string, unknown>;
-  try {
-    serverModule = await import(pathToFileURL(entry).href);
-  } catch (cause) {
-    throw new Error(
-      `prerender could not import the built server entry at ${entry}. Prerendering renders ` +
-        `pages through the server build — make sure an SSR build runs (the server build is a ` +
-        `build-time tool here; it need not be deployed) or point \`serverEntry\` at a module ` +
-        `exporting handleRequest/fetch.`,
-      { cause }
-    );
-  }
-  const handler =
-    serverModule.handleRequest ??
-    serverModule.fetch ??
-    (serverModule.default as { fetch?: unknown } | undefined)?.fetch;
-  if (typeof handler !== "function") {
-    throw new Error(
-      `The server entry at ${entry} exports none of handleRequest, fetch, or default.fetch — ` +
-        `prerender needs a Request -> Response handler to render pages through.`
-    );
-  }
-  return handler as Handler;
 }
 
 async function fileRouteSeeds(
