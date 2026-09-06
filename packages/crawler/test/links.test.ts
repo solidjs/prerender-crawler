@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractLinks, normalizePath } from "../src/links.ts";
+import { extractLinks, normalizePath, normalizeRoute, splitRoute } from "../src/links.ts";
 
 const page = new URL("http://localhost/blog/post-1");
 
@@ -64,5 +64,30 @@ describe("normalizePath", () => {
     expect(normalizePath("")).toBe("/");
     expect(normalizePath("/a/")).toBe("/a");
     expect(normalizePath("/a/b")).toBe("/a/b");
+  });
+});
+
+describe("normalizeRoute", () => {
+  it("keeps the query on request, parameters sorted, fragment dropped", () => {
+    const url = new URL("http://localhost/posts/?b=2&a=1#top");
+    expect(normalizeRoute(url)).toBe("/posts");
+    expect(normalizeRoute(url, { keepQuery: true })).toBe("/posts?a=1&b=2");
+    expect(normalizeRoute(new URL("http://localhost/posts?"), { keepQuery: true })).toBe("/posts");
+  });
+
+  it("extractLinks threads the option through", () => {
+    const html = `<a href="/about?utm=x">a</a> <a href="/about?utm=y">b</a> <a href="/about">c</a>`;
+    expect(extractLinks(html, page, { keepQuery: true })).toEqual([
+      "/about?utm=x",
+      "/about?utm=y",
+      "/about"
+    ]);
+  });
+});
+
+describe("splitRoute", () => {
+  it("separates pathname and search", () => {
+    expect(splitRoute("/posts?page=2")).toEqual({ pathname: "/posts", search: "?page=2" });
+    expect(splitRoute("/posts")).toEqual({ pathname: "/posts", search: "" });
   });
 });

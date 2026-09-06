@@ -424,6 +424,157 @@ describe("crawl", () => {
     expect(result.pages.find(p => p.path === "/about")?.filename).toBe("custom.html");
   });
 
+  it("normalizes seeds the way it normalizes links", async () => {
+    const { transport, requests } = site({ "/about": html("about"), "/posts": html("posts") });
+    const result = await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      pages: ["/about/", "about#top", "/posts?page=2", { path: "/posts", filename: "p.html" }]
+    });
+    expect(result.pages.map(p => p.path).sort()).toEqual(["/about", "/posts"]);
+    expect(requests.sort()).toEqual(["/about", "/posts"]);
+    // the first spelling of /posts (the string) won; the query left no directory behind
+    expect((await readdir(outDir)).sort()).toEqual(["about", "posts"]);
+  });
+
+  describe("keepQuery", () => {
+    /** Like `site`, but keyed on path + query. */
+    function querySite(routes: Record<string, Response>) {
+      const requests: string[] = [];
+      const transport: Transport = {
+        async fetch(request) {
+          const url = new URL(request.url);
+          requests.push(url.pathname + url.search);
+          const answer = routes[url.pathname + url.search];
+          return answer ? answer.clone() : new Response("not found", { status: 404 });
+        }
+      };
+      return { transport, requests };
+    }
+
+    it("renders each query spelling apart, parameters sorted, but writes only the bare path", async () => {
+      const { transport, requests } = querySite({
+        "/posts": html(`<a href="/posts?page=2">2</a> <a href="/posts?page=2&sort=asc">2s</a>`),
+        "/posts?page=2": html(
+          `<a href="/posts?sort=asc&page=2">same</a> <a href="/posts?page=3">3</a>`
+        ),
+        "/posts?page=2&sort=asc": html("sorted"),
+        "/posts?page=3": html("3")
+      });
+      const result = await runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: ["/posts"],
+        keepQuery: true
+      });
+      expect(requests.sort()).toEqual([
+        "/posts",
+        "/posts?page=2",
+        "/posts?page=2&sort=asc",
+        "/posts?page=3"
+      ]);
+      const byPath = Object.fromEntries(result.pages.map(p => [p.path, p]));
+      expect(byPath["/posts"].emitted).toBe(true);
+      expect(byPath["/posts?page=2"].emitted).toBe(false);
+      // the filename is where the page WOULD go — the same file as /posts, which is why it is not written
+      expect(byPath["/posts?page=2"].filename).toBe("posts/index.html");
+      expect(await readFile(join(outDir, "posts/index.html"), "utf8")).toContain(
+        'href="/posts?page=2"'
+      );
+    });
+
+    it("writes a query spelling when its entry names a filename, and follows query redirects", async () => {
+      const { transport } = querySite({
+        "/posts?page=2": html("page two"),
+        "/latest": new Response(null, { status: 302, headers: { location: "/posts?page=2" } })
+      });
+      const result = await runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: [{ path: "/posts?page=2", filename: "posts/page/2/index.html" }, "/latest"],
+        keepQuery: true
+      });
+      expect(await readFile(join(outDir, "posts/page/2/index.html"), "utf8")).toBe("page two");
+      expect(result.redirects).toEqual([{ from: "/latest", to: "/posts?page=2", status: 302 }]);
+      expect(await readFile(join(outDir, "latest/index.html"), "utf8")).toContain(
+        'url=/posts?page=2"'
+      );
+    });
+
+    it("strips queries everywhere when off (the default)", async () => {
+      const { transport, requests } = querySite({
+        "/posts": html(`<a href="/posts?page=2">2</a>`)
+      });
+      await runPrerender({ transport, outDir: await makeOutDir(), pages: ["/posts?page=9"] });
+      expect(requests).toEqual(["/posts"]);
+    });
+  });
+
+  it("times each page, pacing excluded, and exposes the run's state to integrations", async () => {
+    const { transport } = site({
+      "/": html(`<a href="/slow">s</a> <a href="/old">o</a> <a href="/missing">m</a>`),
+      "/slow": () => {
+        const until = performance.now() + 15;
+        while (performance.now() < until);
+        return html("slow");
+      },
+      "/old": new Response(null, { status: 301, headers: { location: "/" } })
+    });
+    let seen: { pages: number; redirects: number; skipped: string[]; files: string[] } | undefined;
+    const result = await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      failOnError: false,
+      interval: 200,
+      integrations: [
+        {
+          name: "first",
+          setup(context) {
+            context.emitFile({ filename: "a.txt", contents: "a" });
+          }
+        },
+        {
+          name: "observer",
+          teardown(context) {
+            seen = {
+              pages: context.pages.length,
+              redirects: context.redirects.length,
+              skipped: context.skipped.map(miss => miss.path),
+              files: context.files.map(file => file.filename)
+            };
+          }
+        }
+      ]
+    });
+    const byPath = Object.fromEntries(result.pages.map(p => [p.path, p]));
+    // /slow started 200ms after / (paced) and spent ~15ms rendering: were the
+    // throttle charged to the page, this would read 200+
+    expect(byPath["/slow"].duration).toBeGreaterThanOrEqual(14);
+    expect(byPath["/slow"].duration).toBeLessThan(150);
+    expect(typeof byPath["/old"].duration).toBe("number");
+    expect(seen).toEqual({ pages: 3, redirects: 1, skipped: ["/missing"], files: ["a.txt"] });
+  });
+
+  it("resolves emitted filenames against the output directory, so ../ escapes it", async () => {
+    const { transport } = site({ "/": html("index") });
+    const root = await makeOutDir();
+    const out = join(root, "dist");
+    await runPrerender({
+      transport,
+      outDir: out,
+      integrations: [
+        {
+          name: "outside",
+          teardown(context) {
+            context.emitFile({ filename: "../report.txt", contents: "outside" });
+          }
+        }
+      ]
+    });
+    expect(await readFile(join(root, "report.txt"), "utf8")).toBe("outside");
+    expect((await readdir(out)).sort()).toEqual(["index.html"]);
+  });
+
   it("records referrers for discovered pages and names them on failures", async () => {
     const { transport } = site({
       "/": html(`<a href="/about">a</a> <a href="/missing">m</a>`),
