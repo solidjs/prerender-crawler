@@ -14,18 +14,23 @@ import {
 } from "@solidjs/web/server-functions/server";
 import { getRequestEvent } from "@solidjs/web";
 import type { RequestEvent, ResponseStub } from "@solidjs/web";
-import { announcePages, solidRouterPages, tanstackRouterPages } from "prerender-crawler/routers";
-import type {
-  SolidRouteLike,
-  SolidRouterLike,
-  TanStackRouterLike
-} from "prerender-crawler/routers";
+import { announcePages } from "prerender-crawler/announce";
+import { solidRouterPages, tanstackRouterPages } from "./routers.ts";
+import type { SolidRouteLike, SolidRouterLike, TanStackRouterLike } from "./routers.ts";
 import { CAPTURE_SINK, PRERENDERED_META_KEY } from "./shared.ts";
 import type { AnnounceRoutesOptions, CaptureSink, PrerenderedFunction } from "./shared.ts";
 
 export { staticArtifactPath, staticCallKey } from "./shared.ts";
 export type { CaptureSink, PrerenderedFunction } from "./shared.ts";
 export type { AnnounceRoutesOptions } from "./shared.ts";
+export { solidRouterPages, tanstackRouterPages } from "./routers.ts";
+export type {
+  SolidRouteLike,
+  SolidRouterLike,
+  SolidRouterPagesOptions,
+  TanStackRouteLike,
+  TanStackRouterLike
+} from "./routers.ts";
 
 /** A router `announceRoutes` can read: Solid Router (instance or tree) or a TanStack Router instance. */
 export type AnnounceableRouter =
