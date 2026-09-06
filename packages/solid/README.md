@@ -61,6 +61,14 @@ export default function App() {
 
 On the server, when the request is the crawler's, the router's static pages go on the response's hint header and the crawl seeds every one of them. A visitor's response is untouched; in the browser it is a no-op. Dynamic routes (`/posts/:id`) are not announced — only a render knows their values; the crawl finds them by their links. Options: `header` (a custom crawl `hintHeader`), `base`.
 
+It takes either router Solid apps use. With TanStack Router the instance is built per request, so the call goes where the router is — the `start.setup` hook:
+
+```ts
+// src/setup.tsx
+const router = createAppRouter(queryClient, history);
+announceRoutes(router);
+```
+
 ## `serverFunctions(options?)`
 
 The integration has two jobs.

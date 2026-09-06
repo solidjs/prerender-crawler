@@ -50,6 +50,21 @@ describe("announceRoutes", () => {
     });
   });
 
+  it("reads a TanStack Router instance by shape", () => {
+    const tanstack = {
+      routesByPath: {
+        "/": { fullPath: "/" },
+        "/users": { fullPath: "/users/", children: [{}] },
+        "/users/$id": { fullPath: "/users/$id" }
+      }
+    };
+    const request = new Request("http://localhost/", { headers: { "x-prerender": "1" } });
+    withEvent(request, event => {
+      expect(announceRoutes(tanstack)).toBe(true);
+      expect(event.response.headers.get("x-prerender")!.split(",").sort()).toEqual(["/", "/users"]);
+    });
+  });
+
   it("is a no-op on the client", () => {
     expect(announceClient(Router)).toBe(false);
   });
