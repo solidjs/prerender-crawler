@@ -30,6 +30,10 @@
     "./vite": {
       "types": "./dist/vite.d.ts",
       "default": "./dist/vite.js"
+    },
+    "./routers": {
+      "types": "./dist/routers.d.ts",
+      "default": "./dist/routers.js"
     }
   },
   "bin": {
@@ -49,20 +53,19 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "filesystem-routing": ">=0.2.0",
     "vite": "^7.0.0 || ^8.0.0"
   },
   "peerDependenciesMeta": {
-    "filesystem-routing": {
-      "optional": true
-    },
     "vite": {
       "optional": true
     }
   },
   "devDependencies": {
+    "@solidjs/router": "2.0.0-next.21",
+    "@solidjs/web": "2.0.0-rc.6",
+    "@tanstack/router-core": "^1.171.27",
     "@types/node": "^22.0.0",
-    "filesystem-routing": "0.2.1",
+    "solid-js": "2.0.0-rc.6",
     "typescript": "^5.8.0",
     "vite": "^8.0.0",
     "vitest": "^4.0.0"

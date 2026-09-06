@@ -1,13 +1,13 @@
 // The Vite plugin: `prerender()` from `prerender-crawler/vite`.
 //
-// Framework-agnostic by construction. It knows three things about the app:
-// that `vite build` produces a client output directory, that some
+// Framework-agnostic by construction. It knows two things about the app:
+// that `vite build` produces a client output directory, and that some
 // environment's output includes a module exporting a fetch-shaped handler
-// (`handleRequest` or `fetch`: Request in, Response out), and — optionally
-// — that a `filesystem-routing` directory names the static pages. Anything
+// (`handleRequest` or `fetch`: Request in, Response out). Anything
 // framework-specific rides along as an integration (see
 // `PrerenderIntegration`), the same seam the engine exposes to non-Vite
-// drivers.
+// drivers. Which pages exist is the server's to say — through links and
+// the hint header (see ./routers.ts) — not something read off the disk.
 //
 // Responsibilities, all build-only:
 //
@@ -20,19 +20,12 @@
 //    environment so runtime code can ask "am I a prerendered build, and of
 //    which kind" — the one bit of client-side knowledge integrations need.
 //    Absent (dev, or a build without this plugin) means "live".
-// 3. Seeding: the static pages of a `filesystem-routing` route directory
-//    seed the crawl automatically, so a page nothing links to still builds.
-import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Plugin } from "vite";
 import { runPrerender } from "./crawl.ts";
-import { fileRoutePages, hasFileSystemRouting } from "./file-routes.ts";
-import type { FileRoutePagesOptions } from "./file-routes.ts";
 import { moduleTransport } from "./transports.ts";
-import type { PageEntry, PrerenderOptions } from "./types.ts";
+import type { PrerenderOptions } from "./types.ts";
 
-export { fileRoutePages, staticRoutePaths } from "./file-routes.ts";
-export type { FileRoutePagesOptions, RouteEntryLike } from "./file-routes.ts";
 export { redirects } from "./redirects.ts";
 export type { RedirectsIntegrationOptions } from "./redirects.ts";
 export { report } from "./report.ts";
@@ -56,25 +49,14 @@ export interface PrerenderPluginOptions extends PrerenderOptions {
    * Defaults to `server.js` inside the `ssr` environment's output directory.
    */
   serverEntry?: string;
-  /**
-   * Seed the crawl with the static pages of the project's
-   * `filesystem-routing` route directory, merged with `pages`. Dynamic
-   * routes (`/posts/:slug`) are still discovered by links — only a render
-   * knows their values.
-   *
-   * `true` (default) applies when the package and `src/routes` exist and
-   * is silently skipped otherwise; pass options to mirror a customized
-   * `fileRoutes({ dir, extensions })` (then a missing package is an error);
-   * `false` disables it.
-   */
-  fileRoutes?: boolean | FileRoutePagesOptions;
 }
 
 /**
  * Prerenders the app at build time: crawls the built server handler from
- * `pages` (default `["/"]`, plus the file-routed static pages, plus every
- * same-origin link discovered along the way) and writes each page's HTML —
- * and whatever the integrations emit — into the client output.
+ * `pages` (default `["/"]`, plus every page the server announces on the
+ * hint header, plus every same-origin link discovered along the way) and
+ * writes each page's HTML — and whatever the integrations emit — into the
+ * client output.
  *
  * ```ts
  * import { prerender } from "prerender-crawler/vite";
@@ -132,26 +114,15 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
             { cause: error }
           );
         }
-        const routeSeeds = await fileRouteSeeds(root, options.fileRoutes);
-        const { serverEntry: _entry, fileRoutes: _fileRoutes, pages, ...crawl } = options;
-        const result = await runPrerender({
-          ...crawl,
-          mode,
-          pages: async () => [
-            ...(typeof pages === "function" ? await pages() : (pages ?? ["/"])),
-            ...routeSeeds
-          ],
-          transport,
-          outDir: clientOut
-        });
+        const { serverEntry: _entry, ...crawl } = options;
+        const result = await runPrerender({ ...crawl, mode, transport, outDir: clientOut });
 
         const written = result.pages.filter(page => page.emitted).length;
-        const seeded = routeSeeds.length ? `, ${routeSeeds.length} seeded from file routes` : "";
         const redirected = result.redirects.length
           ? `, ${result.redirects.length} redirect(s)`
           : "";
         logger.info(
-          `[prerender] rendered ${result.pages.length} page(s) (${written} written${seeded})` +
+          `[prerender] rendered ${result.pages.length} page(s) (${written} written)` +
             `${redirected}, ${result.files.length} file(s) emitted -> ${path.relative(root, clientOut)}`
         );
         for (const miss of result.skipped) {
@@ -160,20 +131,6 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
       }
     }
   };
-}
-
-async function fileRouteSeeds(
-  root: string,
-  option: PrerenderPluginOptions["fileRoutes"]
-): Promise<Array<string | PageEntry>> {
-  if (option === false) return [];
-  const explicit = typeof option === "object" ? option : undefined;
-  if (!explicit) {
-    // auto mode: only when the project actually uses file routing
-    const dir = path.resolve(root, "src/routes");
-    if (!hasFileSystemRouting(root) || !existsSync(dir)) return [];
-  }
-  return fileRoutePages({ root, ...explicit })();
 }
 
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
