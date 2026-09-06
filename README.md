@@ -21,7 +21,18 @@ export default defineConfig({
 });
 ```
 
-`vite build` renders every page through the server build, follows links to find the rest, bakes each `prerendered()` server-function call into a JSON artifact, and leaves `dist/client` as the whole deployment — a Solid app with typed server-side data loading and no server.
+```tsx
+// src/App.tsx
+import { announceRoutes } from "@solidjs/prerender";
+import { Router } from "./router";
+
+export default function App() {
+  announceRoutes(Router); // the router tells the crawl its static pages; no-op for visitors
+  return <Router>{props => props.children}</Router>;
+}
+```
+
+`vite build` renders every page through the server build — the router's announced pages plus every link found along the way — bakes each `prerendered()` server-function call into a JSON artifact, and leaves `dist/client` as the whole deployment — a Solid app with typed server-side data loading and no server.
 
 See [`examples/ssg`](./examples/ssg) for a complete site.
 

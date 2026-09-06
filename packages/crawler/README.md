@@ -2,7 +2,7 @@
 
 Framework-agnostic build-time prerendering. Point it at anything fetch-shaped — `Request` in, `Response` out — and it crawls the site into static files: seed pages, link discovery, header hints, redirects, retries, throttling, and an integration seam for capturing build-time data alongside the pages. No browser, no subprocess, no framework knowledge.
 
-Ships as an engine (`prerender-crawler`), a Vite plugin built on it (`prerender-crawler/vite`), and a CLI for everything else.
+Ships as an engine (`prerender-crawler`), a Vite plugin built on it (`prerender-crawler/vite`), a CLI for everything else, and one tiny module for the app's own server (`prerender-crawler/announce`) so it can tell the crawl which pages it has.
 
 ## CLI
 
@@ -61,7 +61,7 @@ The plugin is build-only. It assumes two things about the app:
 1. `vite build` produces a client output directory (the `client` environment's `outDir`, default `dist/client`).
 2. Some environment's output includes a module exporting a request handler — `handleRequest`, `fetch`, or `default.fetch`. Default: `server.js` in the `ssr` environment's `outDir`; override with `serverEntry`.
 
-After the other environments build, it imports the server handler and crawls it in-process. Pages and integration-emitted files land in the client output. Which pages exist is the server's to say — see [Seeding from the router](#seeding-from-the-router).
+After the other environments build, it imports the server handler and crawls it in-process. Pages and integration-emitted files land in the client output. Which pages exist is the server's to say — see [Announcing pages](#announcing-pages).
 
 ### Options
 
@@ -98,7 +98,7 @@ const result = await runPrerender({
   mode: "static"
 });
 
-result.pages; // RenderedPage[]   — path, referrers, filename, emitted, html, redirect?
+result.pages; // RenderedPage[]   — path, referrers, filename, emitted, response, duration, html, redirect?
 result.redirects; // RedirectRecord[] — { from, to, status }, one per redirected path
 result.files; // EmittedFile[]    — what integrations emitted
 result.skipped; // SkippedPage[]    — failures left out (failOnError: false)
@@ -180,7 +180,7 @@ runPrerender({
 | `mode`                   | `"static"`                                      | See [Modes](#modes). Decides the `emitPages` default.                                                                                                                                   |
 | `pages`                  | `["/"]`                                         | Seeds: strings, `{ path, filename?, emit? }` entries, or a (async) function returning them. Duplicates collapse to one render.                                                          |
 | `crawlLinks`             | `true`                                          | Follow same-origin links in rendered HTML. The only way dynamic routes are discovered without explicit seeding.                                                                         |
-| `hintHeader`             | `"x-prerender"`                                 | Response header naming additional paths (comma-separated) — the route the data lives on announces the routes built from it.                                                             |
+| `hintHeader`             | `"x-prerender"`                                 | Response header naming additional paths (comma-separated). See [Announcing pages](#announcing-pages).                                                                                   |
 | `filter`                 |                                                 | `(path) => boolean`; drops a discovered path before it's fetched.                                                                                                                       |
 | `keepQuery`              | `false`                                         | Render query spellings as distinct pages. See [Query strings](#query-strings).                                                                                                          |
 | `concurrency`            | `8`                                             | Pages in flight at once.                                                                                                                                                                |
@@ -191,7 +191,7 @@ runPrerender({
 | `emitPages`              | `true` static / `false` hybrid                  | Whether rendered pages are written: a boolean, or a per-path predicate. Per-entry `emit` overrides. Unemitted pages still render fully — links are still followed, data still captured. |
 | `autoSubfolderIndex`     | `true`                                          | `/about` → `about/index.html` (true) or `about.html` (false).                                                                                                                           |
 | `origin`                 | `"http://localhost"`                            | Origin requests are minted under.                                                                                                                                                       |
-| `onRendered`             |                                                 | Observes every rendered page — the seam for sitemaps and post-processing.                                                                                                               |
+| `onRendered`             |                                                 | Observes every rendered page as it lands — for post-processing. Integrations see the same pages on `context.pages`.                                                                     |
 | `integrations`           | `[]`                                            | See below.                                                                                                                                                                              |
 
 ### Integrations

@@ -101,8 +101,9 @@ The client learns the posture from `import.meta.env.PRERENDER_MODE`, which the c
 
 ## Other exports
 
+- `solidRouterPages(router | routes, { base? })`, `tanstackRouterPages(router)` — the static-page enumerators behind `announceRoutes`, pure and isomorphic.
 - `staticCallKey(id, args)` / `staticArtifactPath(id, args)` — the artifact key derivation, for tooling that needs to locate an artifact.
-- Types: `PrerenderedFunction`, `ServerFunctionsIntegration`, `ServerFunctionsIntegrationOptions`, `CaptureSink` (server).
+- Types: `PrerenderedFunction`, `AnnounceableRouter`, `AnnounceRoutesOptions`, `SolidRouterLike`, `SolidRouteLike`, `TanStackRouterLike`, `ServerFunctionsIntegration`, `ServerFunctionsIntegrationOptions`, `CaptureSink` (server).
 
 ## License
 
