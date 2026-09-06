@@ -2,7 +2,39 @@
 
 Framework-agnostic build-time prerendering. Point it at anything fetch-shaped — `Request` in, `Response` out — and it crawls the site into static files: seed pages, link discovery, header hints, redirects, retries, throttling, and an integration seam for capturing build-time data alongside the pages. No browser, no subprocess, no framework knowledge.
 
-Ships as an engine (`prerender-crawler`) and a Vite plugin built on it (`prerender-crawler/vite`).
+Ships as an engine (`prerender-crawler`), a Vite plugin built on it (`prerender-crawler/vite`), and a CLI for everything else.
+
+## CLI
+
+Prerender any running server, or any module exporting a request handler, with no framework integration at all:
+
+```sh
+# a running server — a framework's preview server, a container, a staging deploy
+npx prerender-crawler http://localhost:3000 --out dist
+
+# a built server module (handleRequest, fetch, or default.fetch), in-process
+npx prerender-crawler dist/server/server.js --out dist/client --redirects
+```
+
+```
+prerender-crawler <target> --out <dir> [options]
+  -o, --out <dir>          Output directory (required)
+  -p, --page <path>        Seed page; repeatable. Default: /
+  -m, --mode <mode>        static (default) or hybrid
+  -c, --concurrency <n>    Pages in flight at once. Default: 8
+  -i, --interval <ms>      Minimum ms between request starts. Default: 0
+  -r, --retries <n>        Re-fetch attempts for a failed page. Default: 2
+      --origin <url>       Origin requests are minted under (module targets)
+      --hint-header <name> Response header naming extra paths. Default: x-prerender
+      --redirects          Write redirects as _redirects rules instead of stubs
+      --redirects-file <f> Rules file name (implies --redirects). Default: _redirects
+      --no-links           Do not follow links in rendered pages
+      --no-redirect-stubs  Write no meta-refresh stubs at redirected paths
+      --continue           Skip pages that fail instead of failing the run
+      --flat               Write /about as about.html instead of about/index.html
+```
+
+For an HTTP target the crawl origin is the target's, so absolute links in the rendered HTML count as same-origin.
 
 ## Vite plugin
 
@@ -49,42 +81,61 @@ The one distinction every downstream policy keys on:
 
 ## Engine
 
-The plugin is a thin driver. The engine works with any transport:
+The plugin and CLI are thin drivers. The engine works with any transport — anything with a `fetch(request: Request): Promise<Response>`:
 
 ```ts
-import { runPrerender } from "prerender-crawler";
+import { runPrerender, httpTransport, moduleTransport } from "prerender-crawler";
 
 const result = await runPrerender({
-  transport: { fetch: request => app.handle(request) },
+  transport: { fetch: request => app.handle(request) }, // or:
+  // transport: httpTransport("http://localhost:3000"),   a running server
+  // transport: await moduleTransport("dist/server.js"),  a handler module
   outDir: "dist",
   pages: ["/", "/about", { path: "/404", filename: "404.html" }],
   mode: "static"
 });
 
-result.pages; // RenderedPage[] — path, referrers, filename, emitted, html
-result.files; // EmittedFile[]  — what integrations emitted
-result.skipped; // SkippedPage[]  — failures left out (failOnError: false)
+result.pages; // RenderedPage[]   — path, referrers, filename, emitted, html, redirect?
+result.redirects; // RedirectRecord[] — { from, to, status }, one per redirected path
+result.files; // EmittedFile[]    — what integrations emitted
+result.skipped; // SkippedPage[]    — failures left out (failOnError: false)
 ```
+
+`httpTransport` sends the crawl's requests to the target's origin (path and query kept) and hands redirects back as the 3xx responses the server sent. Pass `{ headers }` for an auth token or `{ fetch }` for a custom implementation. `moduleTransport` imports a module exporting `handleRequest`, `fetch`, or `default.fetch` and calls it directly.
+
+### Redirects
+
+A path that answers 3xx is recorded (`result.redirects`, one record per hop — `/a → /b → /c` is two records, the way host rules spell it) and its same-origin target is crawled as a page in its own right, so the destination renders once at its own URL. The redirected path itself gets a **meta-refresh stub** pointing at the chain's final destination, so the old URL keeps working on hosts with no redirect support. A redirect to another spelling of the same page (`/posts → /posts/`) is followed in place, not recorded.
+
+Hosts with real redirect rules do better than stubs:
+
+```ts
+import { redirects } from "prerender-crawler";
+
+runPrerender({ integrations: [redirects()] }); // or prerender({ integrations: [redirects()] })
+```
+
+`redirects()` emits a `_redirects` file (`/from /to 301`, the format Netlify and Cloudflare Pages share) and declares `handlesRedirects`, which stops the engine writing stubs — necessary on Netlify, where an existing file shadows the rule. Options: `filename`, `force` (Netlify's `301!`), and `format(records)` for another host's syntax.
 
 ### Engine options
 
-| Option                   | Default                        |                                                                                                                                                                                         |
-| ------------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                   | `"static"`                     | See [Modes](#modes). Decides the `emitPages` default.                                                                                                                                   |
-| `pages`                  | `["/"]`                        | Seeds: strings, `{ path, filename?, emit? }` entries, or a (async) function returning them. Duplicates collapse to one render.                                                          |
-| `crawlLinks`             | `true`                         | Follow same-origin links in rendered HTML. The only way dynamic routes are discovered without explicit seeding.                                                                         |
-| `hintHeader`             | `"x-prerender"`                | Response header naming additional paths (comma-separated) — the route the data lives on announces the routes built from it.                                                             |
-| `filter`                 |                                | `(path) => boolean`; drops a discovered path before it's fetched.                                                                                                                       |
-| `concurrency`            | `8`                            | Pages in flight at once.                                                                                                                                                                |
-| `interval`               | `0`                            | Minimum ms between the starts of consecutive requests across all workers — a throttle for renders hitting rate-limited APIs.                                                            |
-| `retries` / `retryDelay` | `2` / `500`                    | Re-fetch attempts for a failed page, and the wait between them.                                                                                                                         |
-| `failOnError`            | `true`                         | Whether a page that still fails after retries fails the run. Otherwise it's reported in `skipped`, with the pages that linked to it.                                                    |
-| `maxRedirects`           | `5`                            | Internal redirect hops followed for one page.                                                                                                                                           |
-| `emitPages`              | `true` static / `false` hybrid | Whether rendered pages are written: a boolean, or a per-path predicate. Per-entry `emit` overrides. Unemitted pages still render fully — links are still followed, data still captured. |
-| `autoSubfolderIndex`     | `true`                         | `/about` → `about/index.html` (true) or `about.html` (false).                                                                                                                           |
-| `origin`                 | `"http://localhost"`           | Origin requests are minted under.                                                                                                                                                       |
-| `onRendered`             |                                | Observes every rendered page — the seam for sitemaps and post-processing.                                                                                                               |
-| `integrations`           | `[]`                           | See below.                                                                                                                                                                              |
+| Option                   | Default                                         |                                                                                                                                                                                         |
+| ------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                   | `"static"`                                      | See [Modes](#modes). Decides the `emitPages` default.                                                                                                                                   |
+| `pages`                  | `["/"]`                                         | Seeds: strings, `{ path, filename?, emit? }` entries, or a (async) function returning them. Duplicates collapse to one render.                                                          |
+| `crawlLinks`             | `true`                                          | Follow same-origin links in rendered HTML. The only way dynamic routes are discovered without explicit seeding.                                                                         |
+| `hintHeader`             | `"x-prerender"`                                 | Response header naming additional paths (comma-separated) — the route the data lives on announces the routes built from it.                                                             |
+| `filter`                 |                                                 | `(path) => boolean`; drops a discovered path before it's fetched.                                                                                                                       |
+| `concurrency`            | `8`                                             | Pages in flight at once.                                                                                                                                                                |
+| `interval`               | `0`                                             | Minimum ms between the starts of consecutive requests across all workers — a throttle for renders hitting rate-limited APIs.                                                            |
+| `retries` / `retryDelay` | `2` / `500`                                     | Re-fetch attempts for a failed page, and the wait between them.                                                                                                                         |
+| `failOnError`            | `true`                                          | Whether a page that still fails after retries fails the run. Otherwise it's reported in `skipped`, with the pages that linked to it.                                                    |
+| `redirectStubs`          | `true` unless an integration `handlesRedirects` | Whether redirected paths get a meta-refresh stub file pointing at the chain's end. See [Redirects](#redirects).                                                                         |
+| `emitPages`              | `true` static / `false` hybrid                  | Whether rendered pages are written: a boolean, or a per-path predicate. Per-entry `emit` overrides. Unemitted pages still render fully — links are still followed, data still captured. |
+| `autoSubfolderIndex`     | `true`                                          | `/about` → `about/index.html` (true) or `about.html` (false).                                                                                                                           |
+| `origin`                 | `"http://localhost"`                            | Origin requests are minted under.                                                                                                                                                       |
+| `onRendered`             |                                                 | Observes every rendered page — the seam for sitemaps and post-processing.                                                                                                               |
+| `integrations`           | `[]`                                            | See below.                                                                                                                                                                              |
 
 ### Integrations
 
@@ -95,6 +146,7 @@ interface PrerenderIntegration {
   name: string;
   setup?(context: PrerenderContext): void | Promise<void>; // before the first render
   teardown?(context: PrerenderContext): void | Promise<void>; // after the last render, before writes
+  handlesRedirects?: boolean; // "I write host redirect rules" — the engine skips its stubs
   client?: string; // module a bundler plugin imports into the client build (reserved)
 }
 
@@ -102,14 +154,18 @@ interface PrerenderContext {
   mode: PrerenderMode;
   origin: string;
   outDir: string;
+  pages: readonly RenderedPage[]; // complete by teardown
+  redirects: readonly RedirectRecord[]; // complete by teardown
   emitFile(file: { filename: string; contents: string | Uint8Array }): void;
 }
 ```
 
-`emitFile` is the channel for artifacts produced during the crawl — captured server-function results, extracted payloads, sitemaps. Throwing from `teardown` fails the run: the place to verify the crawl produced everything the runtime half will need. [`@solidjs/prerender`](../solid) is the reference integration.
+`emitFile` is the channel for artifacts produced during the crawl — captured server-function results, extracted payloads, sitemaps. Throwing from `teardown` fails the run: the place to verify the crawl produced everything the runtime half will need. `redirects()` above is the smallest example; [`@solidjs/prerender`](../solid) is the reference integration.
 
 ### Utilities
 
+- `httpTransport(target, { headers?, fetch? })`, `moduleTransport(entry)`, `loadHandler(entry)` — the shipped transports.
+- `redirects(options?)`, `formatRedirectsFile(records, force?)` — the redirects integration and its `_redirects` formatter.
 - `fileRoutePages({ root, dir, extensions })` / `staticRoutePaths(entries)` — the static page paths of a `filesystem-routing` manifest, as a `pages` source.
 - `extractLinks(html)`, `normalizeLink(href, from)`, `normalizePath(path)`, `outputFilename(path, autoSubfolderIndex)` — the crawl's own primitives.
 

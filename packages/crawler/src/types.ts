@@ -41,6 +41,19 @@ export type PagesSource =
   | Array<string | PageEntry>
   | (() => Array<string | PageEntry> | Promise<Array<string | PageEntry>>);
 
+/**
+ * One redirect the crawl observed: a request for `from` answered 3xx. `to`
+ * is a normalized same-origin path, or an absolute URL when the redirect
+ * leaves the origin. A chain (`/a` -> `/b` -> `/c`) is recorded hop by
+ * hop, one record per path, exactly as a host's redirect rules would
+ * express it.
+ */
+export interface RedirectRecord {
+  from: string;
+  to: string;
+  status: number;
+}
+
 /** A page the engine rendered (and, when `emitted`, wrote). */
 export interface RenderedPage {
   /** The normalized route path (`/about`), origin and query stripped. */
@@ -57,8 +70,17 @@ export interface RenderedPage {
   emitted: boolean;
   /** The response the transport answered with (body consumed). */
   response: Response;
-  /** The rendered HTML. */
+  /**
+   * The rendered HTML — or, for a redirected path, the meta-refresh stub
+   * that stands in for it (see `redirect`).
+   */
   html: string;
+  /**
+   * Set when the path answered a redirect instead of a page. The stub in
+   * `html` points at the chain's FINAL destination; `redirect` records this
+   * path's own hop. Sitemap tooling should skip these.
+   */
+  redirect?: RedirectRecord;
 }
 
 /** An extra artifact an integration ships alongside the rendered pages. */
@@ -90,6 +112,10 @@ export interface PrerenderContext {
   mode: PrerenderMode;
   origin: string;
   outDir: string;
+  /** Every page rendered so far — complete by `teardown`. Live view; do not mutate. */
+  pages: readonly RenderedPage[];
+  /** Every redirect observed so far — complete by `teardown`. Live view; do not mutate. */
+  redirects: readonly RedirectRecord[];
   emitFile(file: EmittedFile): void;
 }
 
@@ -104,6 +130,14 @@ export interface PrerenderIntegration {
    * produced everything its runtime half will need.
    */
   teardown?(context: PrerenderContext): void | Promise<void>;
+  /**
+   * Declares that this integration turns the run's redirects into the
+   * host's own rules (a `_redirects` file, say). The engine then skips its
+   * meta-refresh stubs at redirected paths: they would be redundant, and on
+   * hosts where an existing file shadows a rule (Netlify) they would
+   * defeat it. Equivalent to `redirectStubs: false` on the run.
+   */
+  handlesRedirects?: boolean;
   /**
    * A module specifier the bundler integration imports for side effects
    * into the CLIENT build when this integration is active — how an
@@ -152,8 +186,16 @@ export interface PrerenderOptions {
    * @default true
    */
   failOnError?: boolean;
-  /** Internal redirect hops followed for one page. @default 5 */
-  maxRedirects?: number;
+  /**
+   * Whether a redirected path gets a meta-refresh stub file pointing at the
+   * chain's final destination, so the old URL keeps working on hosts with
+   * no redirect support of their own. Turn it off when redirects are
+   * expressed as host rules instead (an integration declaring
+   * `handlesRedirects` does so implicitly): a stub file next to a rule is
+   * redundant at best and, on hosts where files shadow rules, defeats it.
+   * @default true unless an integration declares `handlesRedirects`
+   */
+  redirectStubs?: boolean;
   /**
    * Whether rendered pages are written to disk: a blanket policy, or a
    * per-path predicate; per-entry `emit` flags override it either way. A
@@ -185,6 +227,8 @@ export interface SkippedPage {
 /** What a finished run reports. */
 export interface PrerenderResult {
   pages: RenderedPage[];
+  /** Every redirect the crawl observed, one record per redirected path. */
+  redirects: RedirectRecord[];
   /** Extra files integrations emitted. */
   files: EmittedFile[];
   /** Paths that failed and were skipped (only with `failOnError: false`). */

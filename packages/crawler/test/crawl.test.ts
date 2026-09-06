@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPrerender } from "../src/crawl.ts";
+import { redirects } from "../src/redirects.ts";
 import type { Transport } from "../src/types.ts";
 
 type Answer = Response | (() => Response);
@@ -137,43 +138,178 @@ describe("crawl", () => {
     expect(requests).not.toContain("/admin/secrets");
   });
 
-  it("follows internal redirects and stubs external ones", async () => {
-    const { transport } = site({
-      "/moved": new Response(null, { status: 301, headers: { location: "/target" } }),
-      "/target": html("landed"),
-      "/gone": new Response(null, {
-        status: 302,
-        headers: { location: "https://elsewhere.example/x" }
-      })
-    });
-    await runPrerender({
-      transport,
-      outDir: await makeOutDir(),
-      pages: ["/moved", "/gone"],
-      crawlLinks: false
-    });
-    // the internal chain landed and the ORIGINAL path holds the content
-    expect(await readFile(join(outDir, "moved/index.html"), "utf8")).toBe("landed");
-    // the external redirect became a meta-refresh stub
-    const stub = await readFile(join(outDir, "gone/index.html"), "utf8");
-    expect(stub).toContain("url=https://elsewhere.example/x");
-  });
+  describe("redirects", () => {
+    const redirect = (location: string, status = 301) =>
+      new Response(null, { status, headers: { location } });
 
-  it("bounds redirect chains", async () => {
-    const { transport } = site({
-      "/a": new Response(null, { status: 302, headers: { location: "/b" } }),
-      "/b": new Response(null, { status: 302, headers: { location: "/a" } })
+    it("records each hop, crawls the destination as its own page, and stubs the old path to the chain's end", async () => {
+      const { transport, requests } = site({
+        "/oldest": redirect("/old", 301),
+        "/old": redirect("/new", 302),
+        "/new": html("landed")
+      });
+      const result = await runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: ["/oldest"],
+        crawlLinks: false
+      });
+
+      expect(result.redirects).toEqual([
+        { from: "/oldest", to: "/old", status: 301 },
+        { from: "/old", to: "/new", status: 302 }
+      ]);
+      // the destination rendered once, at its own URL, discovered via the chain
+      expect(requests.sort()).toEqual(["/new", "/old", "/oldest"]);
+      expect(await readFile(join(outDir, "new/index.html"), "utf8")).toBe("landed");
+      const landed = result.pages.find(p => p.path === "/new")!;
+      expect(landed.redirect).toBeUndefined();
+      expect(landed.referrers).toEqual(["/old"]);
+      // both redirected paths stub straight to the FINAL destination
+      for (const path of ["oldest", "old"]) {
+        const stub = await readFile(join(outDir, `${path}/index.html`), "utf8");
+        expect(stub).toContain('content="0; url=/new"');
+        expect(stub).toContain('rel="canonical" href="/new"');
+      }
+      const oldest = result.pages.find(p => p.path === "/oldest")!;
+      expect(oldest.redirect).toEqual({ from: "/oldest", to: "/old", status: 301 });
+      expect(oldest.emitted).toBe(true);
     });
-    await expect(
-      runPrerender({
+
+    it("stubs external redirects with the absolute target and does not crawl it", async () => {
+      const { transport, requests } = site({
+        "/gone": redirect("https://elsewhere.example/x?q=1&r=2", 302)
+      });
+      const result = await runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: ["/gone"],
+        crawlLinks: false
+      });
+      expect(result.redirects).toEqual([
+        { from: "/gone", to: "https://elsewhere.example/x?q=1&r=2", status: 302 }
+      ]);
+      expect(requests).toEqual(["/gone"]);
+      const stub = await readFile(join(outDir, "gone/index.html"), "utf8");
+      // attribute-escaped, so the query survives HTML parsing intact
+      expect(stub).toContain('url=https://elsewhere.example/x?q=1&amp;r=2"');
+    });
+
+    it("follows a redirect to another spelling of the same page in place", async () => {
+      // the trailing-slash canonicalization static file servers perform
+      const { transport, requests } = site({
+        "/posts": redirect("/posts/", 301),
+        "/posts/": html("the posts")
+      });
+      const result = await runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: ["/posts"],
+        crawlLinks: false
+      });
+      expect(requests).toEqual(["/posts", "/posts/"]);
+      expect(result.redirects).toEqual([]);
+      const page = result.pages.find(p => p.path === "/posts")!;
+      expect(page.redirect).toBeUndefined();
+      expect(await readFile(join(outDir, "posts/index.html"), "utf8")).toBe("the posts");
+    });
+
+    it("terminates redirect cycles", async () => {
+      const { transport, requests } = site({
+        "/a": redirect("/b", 302),
+        "/b": redirect("/a", 302)
+      });
+      const result = await runPrerender({
         transport,
         outDir: await makeOutDir(),
         pages: ["/a"],
         crawlLinks: false,
-        maxRedirects: 3,
         retries: 0
-      })
-    ).rejects.toThrow(/exceeded 3 hops/);
+      });
+      expect(requests.sort()).toEqual(["/a", "/b"]);
+      expect(result.redirects).toHaveLength(2);
+      // a cycle has no end; the stub points one hop on rather than hanging
+      expect(await readFile(join(outDir, "a/index.html"), "utf8")).toContain("url=/b");
+    });
+
+    it("writes no stubs when asked, or when an integration handles redirects", async () => {
+      const routes = { "/old": redirect("/new"), "/new": html("landed") };
+      const explicit = await runPrerender({
+        transport: site(routes).transport,
+        outDir: await makeOutDir(),
+        pages: ["/old"],
+        crawlLinks: false,
+        redirectStubs: false
+      });
+      expect(explicit.pages.find(p => p.path === "/old")!.emitted).toBe(false);
+      expect(await readdir(outDir)).toEqual(["new"]);
+
+      await rm(outDir, { recursive: true });
+      const seen: string[] = [];
+      const declared = await runPrerender({
+        transport: site(routes).transport,
+        outDir: await makeOutDir(),
+        pages: ["/old"],
+        crawlLinks: false,
+        integrations: [
+          {
+            name: "rules",
+            handlesRedirects: true,
+            teardown(context) {
+              seen.push(...context.redirects.map(r => `${r.from}>${r.to}`));
+              // pages are complete by teardown, redirect pages included
+              expect(context.pages.map(p => p.path).sort()).toEqual(["/new", "/old"]);
+            }
+          }
+        ]
+      });
+      expect(seen).toEqual(["/old>/new"]);
+      expect(declared.pages.find(p => p.path === "/old")!.emitted).toBe(false);
+      expect(await readdir(outDir)).toEqual(["new"]);
+    });
+
+    it("the redirects() integration emits a _redirects rules file and suppresses stubs", async () => {
+      const { transport } = site({
+        "/b-old": redirect("/b", 301),
+        "/a-old": redirect("https://elsewhere.example/", 302),
+        "/b": html("b")
+      });
+      const result = await runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: ["/b-old", "/a-old"],
+        crawlLinks: false,
+        integrations: [redirects()]
+      });
+      expect(result.files).toEqual([
+        {
+          filename: "_redirects",
+          contents: "/a-old https://elsewhere.example/ 302\n/b-old /b 301\n"
+        }
+      ]);
+      expect((await readdir(outDir)).sort()).toEqual(["_redirects", "b"]);
+
+      // Netlify's forced form and a custom filename
+      const { transport: again } = site({ "/x": redirect("/y"), "/y": html("y") });
+      const forced = await runPrerender({
+        transport: again,
+        outDir: await makeOutDir(),
+        pages: ["/x"],
+        crawlLinks: false,
+        integrations: [redirects({ filename: "rules.txt", force: true })]
+      });
+      expect(forced.files[0]).toEqual({ filename: "rules.txt", contents: "/x /y 301!\n" });
+    });
+
+    it("the redirects() integration emits nothing when nothing redirected", async () => {
+      const { transport } = site({ "/": html("home") });
+      const result = await runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        integrations: [redirects()]
+      });
+      expect(result.files).toEqual([]);
+    });
   });
 
   it("retries 5xx answers and succeeds when the page heals", async () => {
@@ -349,9 +485,41 @@ describe("crawl", () => {
     starts.sort((a, b) => a - b);
     for (let i = 1; i < starts.length; i++) {
       // timers may fire a hair early; the gap must be essentially the interval
-      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(18);
+      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(19);
     }
     expect(starts).toHaveLength(6);
+  });
+
+  it("keeps actual starts apart even when one runs late", async () => {
+    // A busy event loop fires a claimed start's timer late; the NEXT claim's
+    // on-time slot must not then land within the interval of that actual
+    // late start. The first request blocks the loop past the second's slot.
+    const starts: number[] = [];
+    const base = site({ "/a": html("a"), "/b": html("b"), "/c": html("c") });
+    const transport: Transport = {
+      fetch(request) {
+        starts.push(performance.now());
+        if (starts.length === 1) {
+          const until = performance.now() + 28;
+          while (performance.now() < until) {
+            /* the second start's timer (due at +20) fires ~8ms late */
+          }
+        }
+        return base.transport.fetch(request);
+      }
+    };
+    await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      pages: ["/a", "/b", "/c"],
+      crawlLinks: false,
+      concurrency: 3,
+      interval: 20
+    });
+    starts.sort((a, b) => a - b);
+    for (let i = 1; i < starts.length; i++) {
+      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(19);
+    }
   });
 
   it("respects the concurrency bound", async () => {
