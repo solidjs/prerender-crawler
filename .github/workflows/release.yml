@@ -39,7 +39,9 @@ jobs:
   # The OIDC exchange lives in the npm CLI itself and needs npm >= 11.5.1;
   # with an older npm the PUT goes out unauthenticated and the registry
   # answers E404. Node 22 bundles npm 10, hence Node 24 plus an explicit
-  # upgrade rather than trusting whatever the runner image bundles.
+  # pin rather than trusting whatever the runner image bundles. Pinned to
+  # the 11 line, not latest: pnpm publish forwards --no-git-checks to npm,
+  # which npm 12 rejects as an unknown flag (EUNKNOWNCONFIG).
   release:
     needs: test
     runs-on: ubuntu-latest
@@ -52,7 +54,7 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - name: npm with trusted publishing support
-        run: npm install -g npm@latest && npm --version
+        run: npm install -g npm@11 && npm --version
       - run: pnpm install --frozen-lockfile
       - name: Create Release Pull Request or Publish to npm
         uses: changesets/action@v1
