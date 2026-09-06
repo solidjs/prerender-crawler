@@ -1,5 +1,6 @@
 ---
 "prerender-crawler": minor
+"@solidjs/prerender": minor
 ---
 
 Prerender anything over HTTP, from the command line, with redirects the host can serve.
@@ -17,6 +18,10 @@ Prerender anything over HTTP, from the command line, with redirects the host can
 **`report()` integration.** Writes a JSON account of the run — each page's status, content type, duration, output file, written flag and referrers; redirects; skipped pages with errors; files other integrations emitted; totals. `filename` resolves against the output directory, so `"../prerender-report.json"` keeps it out of the deploy. CLI: `--report`, `--report-file`.
 
 **Query-string pages.** `keepQuery: true` renders `/posts?page=2` apart from `/posts` (parameters sorted for dedupe), following its links and capturing its data, but writes it only when its seed entry names a `filename` — a static host serves a path the same for every query. Off by default; CLI `--keep-query`.
+
+**Router seeding, from the server.** New `prerender-crawler/routers` (no Node imports — for application server code): `tanstackRouterPages(router)` and `solidRouterPages(router | routes, { base? })` list a router's static pages from the instance the app built for the request (leaves and indexes, no params or splats), and `announcePages(request, headers, paths)` puts them on the response's hint header when the request is the crawler's. `@solidjs/prerender` gains `announceRoutes(Router)` — one line in the app root, reading the ambient request event; a no-op in the browser. The Vite plugin, the CLI against a module, and the CLI against a running server all seed from the same header.
+
+**Removed:** `fileRoutePages`, `staticRoutePaths`, and the Vite plugin's `fileRoutes` option — build-time seeding that walked a `filesystem-routing` directory and re-derived its path rules. The server's own router is the source of truth for which pages exist, and the header works for crawls that never see the project's disk (the CLI against a running server). `filesystem-routing` is no longer a peer dependency.
 
 **Seeds are normalized like links.** A seed spelled `about/`, `/a#top`, or `/posts?page=2` now meets the crawled link to the same page in one queue entry. Previously a seed with a query was fetched verbatim and written to a literal `posts?page=2/` directory.
 

@@ -21,10 +21,15 @@ import {
   withMeta
 } from "@solidjs/web/server-functions/client";
 import { PRERENDERED_META_KEY, staticArtifactPath } from "./shared.ts";
-import type { PrerenderedFunction } from "./shared.ts";
+import type { AnnounceRoutesOptions, PrerenderedFunction } from "./shared.ts";
 
 export { staticArtifactPath, staticCallKey } from "./shared.ts";
-export type { PrerenderedFunction } from "./shared.ts";
+export type { AnnounceRoutesOptions, PrerenderedFunction } from "./shared.ts";
+
+/** The client half of `announceRoutes`: there is no request here. Always false. */
+export function announceRoutes(_router: unknown, _options?: AnnounceRoutesOptions): boolean {
+  return false;
+}
 
 // the metadata brand rides the same registered symbol the runtime uses, so
 // `isServerFunction` / `getServerFunctionMetadata` recognize prerendered

@@ -14,5 +14,5 @@ export default defineConfig({
   dts: true,
   splitting: true,
   clean: false,
-  external: ["prerender-crawler"]
+  external: [/^prerender-crawler(\/|$)/]
 });

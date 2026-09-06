@@ -132,3 +132,11 @@ export interface PrerenderedFunction<A extends readonly unknown[] = unknown[], T
   /** The live HTTP address the artifact stands in for (dev fallback, form actions). */
   readonly url: string;
 }
+
+/** Options for `announceRoutes`. */
+export interface AnnounceRoutesOptions {
+  /** The crawl's `hintHeader`, if configured away from the default. @default "x-prerender" */
+  header?: string;
+  /** The app's base path, when passing a route tree rather than the router instance. */
+  base?: string;
+}

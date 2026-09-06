@@ -56,22 +56,20 @@ export default defineConfig({
 });
 ```
 
-The plugin is build-only. It assumes three things about the app:
+The plugin is build-only. It assumes two things about the app:
 
 1. `vite build` produces a client output directory (the `client` environment's `outDir`, default `dist/client`).
 2. Some environment's output includes a module exporting a request handler — `handleRequest`, `fetch`, or `default.fetch`. Default: `server.js` in the `ssr` environment's `outDir`; override with `serverEntry`.
-3. Optionally, a [`filesystem-routing`](https://www.npmjs.com/package/filesystem-routing) route directory names the static pages.
 
-After the other environments build, it imports the server handler and crawls it in-process. Pages and integration-emitted files land in the client output.
+After the other environments build, it imports the server handler and crawls it in-process. Pages and integration-emitted files land in the client output. Which pages exist is the server's to say — see [Seeding from the router](#seeding-from-the-router).
 
 ### Options
 
 Everything from [`PrerenderOptions`](#engine-options) plus:
 
-| Option        | Default                  |                                                                                                                                                                                                                                                                                                                                                             |
-| ------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverEntry` | `<ssr outDir>/server.js` | Built module exporting the handler.                                                                                                                                                                                                                                                                                                                         |
-| `fileRoutes`  | `true`                   | Seed the crawl with the static pages of the project's `filesystem-routing` directory. `true` applies when the package and `src/routes` exist and is skipped silently otherwise; pass `{ dir, extensions }` to mirror a customized `fileRoutes()` (then a missing package is an error); `false` disables. Dynamic routes are still found by following links. |
+| Option        | Default                  |                                     |
+| ------------- | ------------------------ | ----------------------------------- |
+| `serverEntry` | `<ssr outDir>/server.js` | Built module exporting the handler. |
 
 ### `import.meta.env.PRERENDER_MODE`
 
@@ -107,6 +105,24 @@ result.skipped; // SkippedPage[]    — failures left out (failOnError: false)
 ```
 
 `httpTransport` sends the crawl's requests to the target's origin (path and query kept) and hands redirects back as the 3xx responses the server sent. Pass `{ headers }` for an auth token or `{ fetch }` for a custom implementation. `moduleTransport` imports a module exporting `handleRequest`, `fetch`, or `default.fetch` and calls it directly.
+
+### Seeding from the router
+
+The crawl finds pages by following links and by reading the hint header (`x-prerender`, comma-separated paths) off responses. A page nothing links to is invisible to the first; the second is how a server that knows its routes declares them — and the thing that knows the routes is the router the app built for the request. `prerender-crawler/routers` has the helpers, free of Node imports so application server code can use them:
+
+```ts
+import { announcePages, tanstackRouterPages, solidRouterPages } from "prerender-crawler/routers";
+
+// TanStack Router (any flavor — the helper reads the instance's `routesByPath`)
+announcePages(request, response.headers, tanstackRouterPages(router));
+
+// Solid Router (a `createRouter` instance, or a route-definition tree with `{ base }`)
+announcePages(request, response.headers, solidRouterPages(Router));
+```
+
+`announcePages` writes the header only when the request is the crawler's (it carries the hint header) — a visitor's response is untouched. Each `*Pages` helper returns the paths that address a static page: no parameters or splats, a leaf or an index (a layout with children but no index has no page of its own). Dynamic routes are still found by their links; only a render knows their values. The Vite plugin, the CLI against a module, and the CLI against a running server all send the hint header, so one line in the app seeds all three.
+
+[`@solidjs/prerender`](../solid) wraps this as `announceRoutes(Router)` for Solid apps, reading the request from the ambient request event.
 
 ### Redirects
 
@@ -209,12 +225,12 @@ interface PrerenderContext {
 - `redirects(options?)`, `formatRedirectsFile(records, force?)` — the redirects integration and its `_redirects` formatter.
 - `sitemap(options)`, `indexable(page)`, `formatSitemap(entries)` — the sitemap integration and its parts.
 - `report(options?)` — the crawl report integration.
-- `fileRoutePages({ root, dir, extensions })` / `staticRoutePaths(entries)` — the static page paths of a `filesystem-routing` manifest, as a `pages` source.
+- `prerender-crawler/routers`: `announcePages(request, headers, paths)`, `tanstackRouterPages(router)`, `solidRouterPages(router | routes, { base? })`, `HINT_HEADER`.
 - `extractLinks(html, pageUrl, { keepQuery? })`, `normalizeLink(href, base, origin)`, `normalizeRoute(url)`, `normalizePath(pathname)`, `splitRoute(route)`, `outputFilename(path, autoSubfolderIndex)` — the crawl's own primitives.
 
 ## Requirements
 
-Node 20+. Vite 7 or 8 for the plugin (optional peer). `filesystem-routing` ≥ 0.2 for route seeding (optional peer).
+Node 20+. Vite 7 or 8 for the plugin (optional peer).
 
 ## License
 
