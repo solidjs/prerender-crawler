@@ -4,6 +4,8 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { runPrerender } from "./crawl.ts";
 import { redirects } from "./redirects.ts";
+import { report } from "./report.ts";
+import { sitemap } from "./sitemap.ts";
 import { httpTransport, moduleTransport } from "./transports.ts";
 import type { PrerenderMode, PrerenderIntegration, Transport } from "./types.ts";
 
@@ -28,6 +30,16 @@ Options:
       --redirects          Write the redirects as host rules (_redirects format,
                            Netlify / Cloudflare Pages) instead of meta-refresh stubs
       --redirects-file <f> Rules file name (implies --redirects). Default: _redirects
+      --sitemap <origin>   Write sitemap.xml with entries under this public origin
+                           (https://example.com)
+      --sitemap-file <f>   Sitemap file name. Default: sitemap.xml
+      --report             Write a JSON report of the crawl (pages, timings, referrers,
+                           redirects, skips)
+      --report-file <f>    Report file name (implies --report). Resolved against the
+                           output dir; ../ keeps it out of the deploy.
+                           Default: prerender-report.json
+      --keep-query         Render /posts?page=2 apart from /posts (not written unless
+                           the app maps queries to files — see docs)
       --no-links           Do not follow links in rendered pages
       --no-redirect-stubs  Write no meta-refresh stubs at redirected paths
       --continue           Skip pages that fail instead of failing the run
@@ -88,6 +100,16 @@ export async function main(argv: string[], io: CliIO): Promise<number> {
   if (values.redirects || values["redirects-file"] !== undefined) {
     integrations.push(redirects({ filename: values["redirects-file"] }));
   }
+  if (values.sitemap !== undefined || values["sitemap-file"] !== undefined) {
+    if (!values.sitemap || !/^https?:\/\//.test(values.sitemap)) {
+      io.stderr(`--sitemap needs the site's public origin (https://example.com).`);
+      return 2;
+    }
+    integrations.push(sitemap({ hostname: values.sitemap, filename: values["sitemap-file"] }));
+  }
+  if (values.report || values["report-file"] !== undefined) {
+    integrations.push(report({ filename: values["report-file"] }));
+  }
 
   const outDir = path.resolve(values.out);
   try {
@@ -102,6 +124,7 @@ export async function main(argv: string[], io: CliIO): Promise<number> {
       retries: values.retries !== undefined ? integer(values.retries) : undefined,
       hintHeader: values["hint-header"],
       crawlLinks: !values["no-links"],
+      keepQuery: values["keep-query"],
       redirectStubs: values["no-redirect-stubs"] ? false : undefined,
       failOnError: !values.continue,
       autoSubfolderIndex: !values.flat,
@@ -137,6 +160,11 @@ const spec = {
     "hint-header": { type: "string" },
     redirects: { type: "boolean" },
     "redirects-file": { type: "string" },
+    sitemap: { type: "string" },
+    "sitemap-file": { type: "string" },
+    report: { type: "boolean" },
+    "report-file": { type: "string" },
+    "keep-query": { type: "boolean" },
     "no-links": { type: "boolean" },
     "no-redirect-stubs": { type: "boolean" },
     continue: { type: "boolean" },

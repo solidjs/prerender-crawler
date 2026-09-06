@@ -28,6 +28,11 @@ prerender-crawler <target> --out <dir> [options]
       --hint-header <name> Response header naming extra paths. Default: x-prerender
       --redirects          Write redirects as _redirects rules instead of stubs
       --redirects-file <f> Rules file name (implies --redirects). Default: _redirects
+      --sitemap <origin>   Write sitemap.xml with entries under this public origin
+      --sitemap-file <f>   Sitemap file name. Default: sitemap.xml
+      --report             Write a JSON report of the crawl (pages, timings, referrers, ...)
+      --report-file <f>    Report file name (implies --report). Default: prerender-report.json
+      --keep-query         Render /posts?page=2 apart from /posts (see Query strings)
       --no-links           Do not follow links in rendered pages
       --no-redirect-stubs  Write no meta-refresh stubs at redirected paths
       --continue           Skip pages that fail instead of failing the run
@@ -117,6 +122,39 @@ runPrerender({ integrations: [redirects()] }); // or prerender({ integrations: [
 
 `redirects()` emits a `_redirects` file (`/from /to 301`, the format Netlify and Cloudflare Pages share) and declares `handlesRedirects`, which stops the engine writing stubs — necessary on Netlify, where an existing file shadows the rule. Options: `filename`, `force` (Netlify's `301!`), and `format(records)` for another host's syntax.
 
+### Sitemap
+
+```ts
+import { sitemap } from "prerender-crawler";
+
+runPrerender({ integrations: [sitemap({ hostname: "https://example.com" })] });
+```
+
+Every rendered page becomes a `<url>` entry — the crawl knows the one thing a route manifest cannot, which pages actually exist with dynamic segments expanded. Redirect stubs, non-HTML responses, query spellings, and pages marked `noindex` (`<meta name="robots">` in the head or an `X-Robots-Tag` header) are left out, the same signals a search engine honors on the live site. Options: `filename`, `trailingSlash`, `filter(page)` for further exclusions, and `entry(page)` returning `lastmod` / `changefreq` / `priority` per page. `indexable(page)` and `formatSitemap(entries)` are exported for tooling that formats its own.
+
+### Report
+
+```ts
+import { report } from "prerender-crawler";
+
+runPrerender({ integrations: [report({ filename: "../prerender-report.json" })] });
+```
+
+Writes what the crawl did as JSON: every page with its status, content type, duration, output file, whether it was written and which pages linked to it; every redirect; every skipped page with its error and referrers; every file other integrations emitted; and totals. It answers "why was this page crawled", "which pages are slow" and "what did the build produce" after the process is gone. The default filename lands in the output directory and deploys with the site — `../` keeps it a build artifact.
+
+### Query strings
+
+By default the query is stripped from every URL the crawl sees: `/posts`, `/posts?page=2` and `/posts?utm=x` are one page, rendered once. That is what a static host can serve — a file at a path, the same for every query.
+
+`keepQuery: true` makes each query spelling a page of its own (parameters sorted, so `?a=1&b=2` and `?b=2&a=1` meet). Each renders separately — its links are followed, its data captured — but is **written only when its seed entry names a `filename`**, because `posts/index.html` is already `/posts`. It exists for hybrid builds baking per-query data, and for sites that map queries onto files themselves:
+
+```ts
+runPrerender({
+  keepQuery: true,
+  pages: [{ path: "/posts?page=2", filename: "posts/page/2/index.html" }]
+});
+```
+
 ### Engine options
 
 | Option                   | Default                                         |                                                                                                                                                                                         |
@@ -126,6 +164,7 @@ runPrerender({ integrations: [redirects()] }); // or prerender({ integrations: [
 | `crawlLinks`             | `true`                                          | Follow same-origin links in rendered HTML. The only way dynamic routes are discovered without explicit seeding.                                                                         |
 | `hintHeader`             | `"x-prerender"`                                 | Response header naming additional paths (comma-separated) — the route the data lives on announces the routes built from it.                                                             |
 | `filter`                 |                                                 | `(path) => boolean`; drops a discovered path before it's fetched.                                                                                                                       |
+| `keepQuery`              | `false`                                         | Render query spellings as distinct pages. See [Query strings](#query-strings).                                                                                                          |
 | `concurrency`            | `8`                                             | Pages in flight at once.                                                                                                                                                                |
 | `interval`               | `0`                                             | Minimum ms between the starts of consecutive requests across all workers — a throttle for renders hitting rate-limited APIs.                                                            |
 | `retries` / `retryDelay` | `2` / `500`                                     | Re-fetch attempts for a failed page, and the wait between them.                                                                                                                         |
@@ -156,18 +195,22 @@ interface PrerenderContext {
   outDir: string;
   pages: readonly RenderedPage[]; // complete by teardown
   redirects: readonly RedirectRecord[]; // complete by teardown
+  skipped: readonly SkippedPage[]; // complete by teardown
+  files: readonly EmittedFile[]; // what earlier integrations emitted
   emitFile(file: { filename: string; contents: string | Uint8Array }): void;
 }
 ```
 
-`emitFile` is the channel for artifacts produced during the crawl — captured server-function results, extracted payloads, sitemaps. Throwing from `teardown` fails the run: the place to verify the crawl produced everything the runtime half will need. `redirects()` above is the smallest example; [`@solidjs/prerender`](../solid) is the reference integration.
+`emitFile` is the channel for artifacts produced during the crawl — captured server-function results, extracted payloads, sitemaps. Filenames resolve against the output directory; `../` or an absolute path lands outside it. Throwing from `teardown` fails the run: the place to verify the crawl produced everything the runtime half will need. `redirects()`, `sitemap()` and `report()` above are the shipped examples, each a formatter over the context; [`@solidjs/prerender`](../solid) is the reference integration with a runtime half.
 
 ### Utilities
 
 - `httpTransport(target, { headers?, fetch? })`, `moduleTransport(entry)`, `loadHandler(entry)` — the shipped transports.
 - `redirects(options?)`, `formatRedirectsFile(records, force?)` — the redirects integration and its `_redirects` formatter.
+- `sitemap(options)`, `indexable(page)`, `formatSitemap(entries)` — the sitemap integration and its parts.
+- `report(options?)` — the crawl report integration.
 - `fileRoutePages({ root, dir, extensions })` / `staticRoutePaths(entries)` — the static page paths of a `filesystem-routing` manifest, as a `pages` source.
-- `extractLinks(html)`, `normalizeLink(href, from)`, `normalizePath(path)`, `outputFilename(path, autoSubfolderIndex)` — the crawl's own primitives.
+- `extractLinks(html, pageUrl, { keepQuery? })`, `normalizeLink(href, base, origin)`, `normalizeRoute(url)`, `normalizePath(pathname)`, `splitRoute(route)`, `outputFilename(path, autoSubfolderIndex)` — the crawl's own primitives.
 
 ## Requirements
 
