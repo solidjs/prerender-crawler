@@ -106,23 +106,25 @@ result.skipped; // SkippedPage[]    — failures left out (failOnError: false)
 
 `httpTransport` sends the crawl's requests to the target's origin (path and query kept) and hands redirects back as the 3xx responses the server sent. Pass `{ headers }` for an auth token or `{ fetch }` for a custom implementation. `moduleTransport` imports a module exporting `handleRequest`, `fetch`, or `default.fetch` and calls it directly.
 
-### Seeding from the router
+### Announcing pages
 
-The crawl finds pages by following links and by reading the hint header (`x-prerender`, comma-separated paths) off responses. A page nothing links to is invisible to the first; the second is how a server that knows its routes declares them — and the thing that knows the routes is the router the app built for the request. `prerender-crawler/routers` has the helpers, free of Node imports so application server code can use them:
+The crawl finds pages by following links and by reading the hint header (`x-prerender`, comma-separated paths) off responses. A page nothing links to is invisible to the first; the second is how a server that knows its routes declares them — and the thing that knows the routes is the router the app built for the request. The crawler knows no router; it only defines the wire. `prerender-crawler/announce` is that wire, free of Node imports so application server code can use it:
 
 ```ts
-import { announcePages, tanstackRouterPages, solidRouterPages } from "prerender-crawler/routers";
+import { announcePages } from "prerender-crawler/announce";
 
-// TanStack Router (any flavor — the helper reads the instance's `routesByPath`)
-announcePages(request, response.headers, tanstackRouterPages(router));
-
-// Solid Router (a `createRouter` instance, or a route-definition tree with `{ base }`)
-announcePages(request, response.headers, solidRouterPages(Router));
+// in the request handler, with whatever the router exposes — e.g. TanStack Router:
+const pages = Object.entries(router.routesByPath)
+  .filter(
+    ([path, route]) => !path.includes("$") && (route.fullPath.endsWith("/") || !route.children)
+  )
+  .map(([path]) => path);
+announcePages(request, response.headers, pages);
 ```
 
-`announcePages` writes the header only when the request is the crawler's (it carries the hint header) — a visitor's response is untouched. Each `*Pages` helper returns the paths that address a static page: no parameters or splats, a leaf or an index (a layout with children but no index has no page of its own). Dynamic routes are still found by their links; only a render knows their values. The Vite plugin, the CLI against a module, and the CLI against a running server all send the hint header, so one line in the app seeds all three.
+`announcePages` writes the header only when the request is the crawler's (it carries the hint header) — a visitor's response is untouched. What to announce: the paths that address a static page — no parameters or splats (only a render knows their values; the crawl finds those pages by their links), leaves and indexes (a layout with children but no index has no page of its own). The Vite plugin, the CLI against a module, and the CLI against a running server all send the hint header, so one line in the app seeds all three.
 
-[`@solidjs/prerender`](../solid) wraps this as `announceRoutes(Router)` for Solid apps, reading the request from the ambient request event.
+Enumerating a specific router's static pages is the framework integration's job, not this package's: [`@solidjs/prerender`](../solid) ships `solidRouterPages`, `tanstackRouterPages`, and `announceRoutes(router)` (which also reads the request from the ambient request event) for the routers Solid apps use.
 
 ### Redirects
 
@@ -225,7 +227,7 @@ interface PrerenderContext {
 - `redirects(options?)`, `formatRedirectsFile(records, force?)` — the redirects integration and its `_redirects` formatter.
 - `sitemap(options)`, `indexable(page)`, `formatSitemap(entries)` — the sitemap integration and its parts.
 - `report(options?)` — the crawl report integration.
-- `prerender-crawler/routers`: `announcePages(request, headers, paths)`, `tanstackRouterPages(router)`, `solidRouterPages(router | routes, { base? })`, `HINT_HEADER`.
+- `prerender-crawler/announce`: `announcePages(request, headers, paths, { header? })`, `HINT_HEADER` — the wire, for application server code.
 - `extractLinks(html, pageUrl, { keepQuery? })`, `normalizeLink(href, base, origin)`, `normalizeRoute(url)`, `normalizePath(pathname)`, `splitRoute(route)`, `outputFilename(path, autoSubfolderIndex)` — the crawl's own primitives.
 
 ## Requirements

@@ -7,7 +7,7 @@
 // framework-specific rides along as an integration (see
 // `PrerenderIntegration`), the same seam the engine exposes to non-Vite
 // drivers. Which pages exist is the server's to say — through links and
-// the hint header (see ./routers.ts) — not something read off the disk.
+// the hint header (see ./announce.ts) — not something read off the disk.
 //
 // Responsibilities, all build-only:
 //

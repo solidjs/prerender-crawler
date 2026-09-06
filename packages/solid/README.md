@@ -69,6 +69,8 @@ const router = createAppRouter(queryClient, history);
 announceRoutes(router);
 ```
 
+The enumerators behind it are exported too — `solidRouterPages(router | routes, { base? })` and `tanstackRouterPages(router)` — for code that wants the path list itself (a sitemap of its own, a hand-rolled `announcePages` call from `prerender-crawler/announce`). Both are pure: they read the router instance's public shape and import nothing from either router package.
+
 ## `serverFunctions(options?)`
 
 The integration has two jobs.

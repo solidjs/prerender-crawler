@@ -6,15 +6,8 @@ export { outputFilename } from "./output.ts";
 export { formatRedirectsFile, redirects } from "./redirects.ts";
 export type { RedirectsIntegrationOptions } from "./redirects.ts";
 export { report } from "./report.ts";
-export { HINT_HEADER, announcePages, solidRouterPages, tanstackRouterPages } from "./routers.ts";
-export type {
-  AnnounceOptions,
-  SolidRouteLike,
-  SolidRouterLike,
-  SolidRouterPagesOptions,
-  TanStackRouteLike,
-  TanStackRouterLike
-} from "./routers.ts";
+export { HINT_HEADER, announcePages } from "./announce.ts";
+export type { AnnounceOptions } from "./announce.ts";
 export type {
   PrerenderReport,
   ReportIntegrationOptions,

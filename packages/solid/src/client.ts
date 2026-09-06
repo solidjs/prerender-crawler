@@ -26,6 +26,15 @@ import type { AnnounceRoutesOptions, PrerenderedFunction } from "./shared.ts";
 export { staticArtifactPath, staticCallKey } from "./shared.ts";
 export type { AnnounceRoutesOptions, PrerenderedFunction } from "./shared.ts";
 
+export { solidRouterPages, tanstackRouterPages } from "./routers.ts";
+export type {
+  SolidRouteLike,
+  SolidRouterLike,
+  SolidRouterPagesOptions,
+  TanStackRouteLike,
+  TanStackRouterLike
+} from "./routers.ts";
+
 /** A router `announceRoutes` can read — see the server half. */
 export type AnnounceableRouter = unknown;
 

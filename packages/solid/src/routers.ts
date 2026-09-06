@@ -1,52 +1,13 @@
-/**
- * Router helpers: which of a router's routes are static pages.
- *
- * The crawl finds pages by following links and by reading the hint header
- * (`x-prerender`) off responses. A route nothing links to is invisible to
- * the first; the second is how a server that KNOWS its routes declares
- * them — and the thing that knows the routes is the router the app built
- * for the request. So each helper here takes a router (or its route tree)
- * and returns the paths that address a static page: no parameters, no
- * splats, a leaf or an index. The app puts them on the hint header of its
- * response with `announcePages`, and every crawl — the Vite plugin, the
- * CLI against a built module, the CLI against a running server — seeds
- * from the answer.
- *
- * Nothing here imports a router package: each helper is typed against the
- * subset of the router's public shape it reads.
- *
- * This module is imported by application SERVER code, so it stays free of
- * Node imports.
- */
-
-/** The hint header the engine reads, and the request header it sends. */
-export const HINT_HEADER = "x-prerender";
-
-export interface AnnounceOptions {
-  /** The header name, if the crawl was configured with a custom `hintHeader`. @default "x-prerender" */
-  header?: string;
-}
-
-/**
- * Puts `paths` on the response's hint header — when the request is the
- * crawler's (it carries the hint header). Returns whether it did. A
- * regular visitor's response is left untouched.
- *
- * ```ts
- * announcePages(event.request, event.response.headers, solidRouterPages(Router));
- * ```
- */
-export function announcePages(
-  request: Request,
-  headers: Headers,
-  paths: readonly string[],
-  options: AnnounceOptions = {}
-): boolean {
-  const { header = HINT_HEADER } = options;
-  if (!request.headers.has(header) || paths.length === 0) return false;
-  headers.set(header, paths.join(","));
-  return true;
-}
+// Which of a router's routes are static pages — for the routers Solid apps
+// use. Pure and isomorphic: each helper reads the subset of the router's
+// public shape it needs, imports nothing from any router package, and
+// returns the paths `announceRoutes` (or `announcePages` from
+// `prerender-crawler/announce`) puts on the crawl's hint header.
+//
+// A route is a page when its path has no parameter or splat segment (only
+// a render knows their values; the crawl finds those pages by their links)
+// and it is a leaf or an index — a layout with children but no index has
+// no page of its own.
 
 // ---------------------------------------------------------------------------
 // TanStack Router (@tanstack/react-router, solid-router, vue-router — one core)
