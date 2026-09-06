@@ -14,4 +14,6 @@ Prerender anything over HTTP, from the command line, with redirects the host can
 
 **Integration context.** `PrerenderContext` gains live, read-only `pages` and `redirects` views, complete by `teardown`.
 
+**Fixed:** `interval` now bounds the gap between _actual_ request starts. Previously it spaced claimed time slots, so a start delayed by a busy event loop could be followed by an on-time one less than `interval` later.
+
 **Removed:** `maxRedirects`. Chains are no longer followed in place, so there is nothing to bound; cycles terminate naturally because each path is crawled once.

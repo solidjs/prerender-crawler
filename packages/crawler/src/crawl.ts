@@ -101,16 +101,28 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     queue.push({ path });
   };
 
-  // The throttle: every request start claims the next slot on a shared
-  // timeline, so starts are at least `interval` apart no matter how many
-  // workers are running.
+  // The throttle. Two mechanisms, because the guarantee is about ACTUAL
+  // starts: claiming the next slot on a shared timeline keeps concurrent
+  // workers apart in advance, and holding until `interval` has passed since
+  // the last real start covers the case a claim cannot — a start that ran
+  // late (busy event loop) must not be crowded by the next one's on-time
+  // slot. The hold's check-then-record runs without interleaving, so two
+  // workers waking together cannot both pass it.
   let nextSlot = 0;
+  let lastStart = -Infinity;
   async function pace() {
     if (interval <= 0) return;
-    const now = Date.now();
+    const now = performance.now();
     const slot = Math.max(now, nextSlot);
     nextSlot = slot + interval;
     if (slot > now) await wait(slot - now);
+    let started = performance.now();
+    while (started - lastStart < interval) {
+      await wait(lastStart + interval - started);
+      started = performance.now();
+    }
+    lastStart = started;
+    if (nextSlot < started + interval) nextSlot = started + interval;
   }
 
   // Redirects are not followed in place: a 3xx makes the path a redirect

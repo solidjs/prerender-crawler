@@ -485,9 +485,41 @@ describe("crawl", () => {
     starts.sort((a, b) => a - b);
     for (let i = 1; i < starts.length; i++) {
       // timers may fire a hair early; the gap must be essentially the interval
-      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(18);
+      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(19);
     }
     expect(starts).toHaveLength(6);
+  });
+
+  it("keeps actual starts apart even when one runs late", async () => {
+    // A busy event loop fires a claimed start's timer late; the NEXT claim's
+    // on-time slot must not then land within the interval of that actual
+    // late start. The first request blocks the loop past the second's slot.
+    const starts: number[] = [];
+    const base = site({ "/a": html("a"), "/b": html("b"), "/c": html("c") });
+    const transport: Transport = {
+      fetch(request) {
+        starts.push(performance.now());
+        if (starts.length === 1) {
+          const until = performance.now() + 28;
+          while (performance.now() < until) {
+            /* the second start's timer (due at +20) fires ~8ms late */
+          }
+        }
+        return base.transport.fetch(request);
+      }
+    };
+    await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      pages: ["/a", "/b", "/c"],
+      crawlLinks: false,
+      concurrency: 3,
+      interval: 20
+    });
+    starts.sort((a, b) => a - b);
+    for (let i = 1; i < starts.length; i++) {
+      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(19);
+    }
   });
 
   it("respects the concurrency bound", async () => {
