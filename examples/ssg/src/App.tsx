@@ -1,10 +1,14 @@
 import { Title } from "@solidjs/meta";
+import { announceRoutes } from "@solidjs/prerender";
 import { Loading } from "solid-js";
 import { Router } from "./router";
 
 // The app root: the router and the site-wide layout. Pages live under
-// src/routes; the build crawls them into static HTML starting from "/".
+// src/routes; the build crawls them into static HTML starting from "/",
+// and the router announces its static pages to the crawl so one nothing
+// links to still builds. (A no-op for visitors and in the browser.)
 export default function App() {
+  announceRoutes(Router);
   return (
     <Router>
       {props => (
