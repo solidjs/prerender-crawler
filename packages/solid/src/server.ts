@@ -14,8 +14,12 @@ import {
 } from "@solidjs/web/server-functions/server";
 import { getRequestEvent } from "@solidjs/web";
 import type { RequestEvent, ResponseStub } from "@solidjs/web";
-import { announcePages, solidRouterPages } from "prerender-crawler/routers";
-import type { SolidRouteLike, SolidRouterLike } from "prerender-crawler/routers";
+import { announcePages, solidRouterPages, tanstackRouterPages } from "prerender-crawler/routers";
+import type {
+  SolidRouteLike,
+  SolidRouterLike,
+  TanStackRouterLike
+} from "prerender-crawler/routers";
 import { CAPTURE_SINK, PRERENDERED_META_KEY } from "./shared.ts";
 import type { AnnounceRoutesOptions, CaptureSink, PrerenderedFunction } from "./shared.ts";
 
@@ -23,13 +27,21 @@ export { staticArtifactPath, staticCallKey } from "./shared.ts";
 export type { CaptureSink, PrerenderedFunction } from "./shared.ts";
 export type { AnnounceRoutesOptions } from "./shared.ts";
 
+/** A router `announceRoutes` can read: Solid Router (instance or tree) or a TanStack Router instance. */
+export type AnnounceableRouter =
+  SolidRouterLike | SolidRouteLike | readonly SolidRouteLike[] | TanStackRouterLike;
+
 /**
  * Tells a prerender crawl which pages this app's router has — the server
- * half. Called during a server render (the app root is the natural place),
- * it reads the ambient request: when the request is the crawler's, the
- * router's static pages go on the response's hint header and the crawl
- * seeds every one of them, linked or not. A visitor's request is untouched;
- * on the client this is a no-op. Returns whether it announced.
+ * half. Called during a server render or request setup, it reads the
+ * ambient request: when the request is the crawler's, the router's static
+ * pages go on the response's hint header and the crawl seeds every one of
+ * them, linked or not. A visitor's request is untouched; on the client
+ * this is a no-op. Returns whether it announced.
+ *
+ * Takes either router Solid apps use — a Solid Router `createRouter`
+ * instance (or its route-definition tree, with `base`) or a TanStack
+ * Router instance — and tells them apart by shape.
  *
  * ```tsx
  * import { announceRoutes } from "@solidjs/prerender";
@@ -41,19 +53,22 @@ export type { AnnounceRoutesOptions } from "./shared.ts";
  * }
  * ```
  *
- * Dynamic routes (`/posts/:id`) are not announced — only a render knows
- * their values; the crawl finds them by their links.
+ * Dynamic routes (`/posts/:id`, `/posts/$id`) are not announced — only a
+ * render knows their values; the crawl finds them by their links.
  */
-export function announceRoutes(
-  router: SolidRouterLike | SolidRouteLike | readonly SolidRouteLike[],
-  options: AnnounceRoutesOptions = {}
-): boolean {
+export function announceRoutes(router: AnnounceableRouter, options: AnnounceRoutesOptions = {}) {
   const event = getRequestEvent() as (RequestEvent & { response?: ResponseStub }) | undefined;
   if (!event?.response || event.response.committed) return false;
   if (!event.request.headers.has(options.header ?? "x-prerender")) return false;
-  const pages = solidRouterPages(router, { base: options.base });
+  const pages = isTanStackRouter(router)
+    ? tanstackRouterPages(router)
+    : solidRouterPages(router, { base: options.base });
   return announcePages(event.request, event.response.headers, pages, { header: options.header });
 }
+
+// a TanStack instance carries its path index; nothing of Solid Router's does
+const isTanStackRouter = (router: AnnounceableRouter): router is TanStackRouterLike =>
+  typeof router === "object" && router !== null && "routesByPath" in router;
 
 const SERVER_FUNCTION_METADATA = Symbol.for("solid.ServerFunctionMetadata");
 

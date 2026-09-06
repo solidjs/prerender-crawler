@@ -26,8 +26,14 @@ import type { AnnounceRoutesOptions, PrerenderedFunction } from "./shared.ts";
 export { staticArtifactPath, staticCallKey } from "./shared.ts";
 export type { AnnounceRoutesOptions, PrerenderedFunction } from "./shared.ts";
 
+/** A router `announceRoutes` can read — see the server half. */
+export type AnnounceableRouter = unknown;
+
 /** The client half of `announceRoutes`: there is no request here. Always false. */
-export function announceRoutes(_router: unknown, _options?: AnnounceRoutesOptions): boolean {
+export function announceRoutes(
+  _router: AnnounceableRouter,
+  _options?: AnnounceRoutesOptions
+): boolean {
   return false;
 }
 
