@@ -1,8 +1,9 @@
 // The full prerendered-function story, without Vite: the server half
 // captures during a real prerender-crawler crawl (through the capture
-// integration the plugin installs), artifacts land on disk, and the client
-// half — flipped to the static posture — reads them back, rich types
-// included.
+// integration the plugin installs), the integration replays each call
+// through the app's real server-function endpoint, artifacts land on disk,
+// and the client half — flipped to the static posture — reads them back
+// through the runtime's own transport, rich types included.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,7 @@ import { runPrerender } from "prerender-crawler";
 import {
   createServerReference as createServerSideReference,
   getServerFunctionMetadata,
+  handleServerFunctionRequest,
   registerServerReference
 } from "@solidjs/web/server-functions/server";
 import { createServerReference as createClientReference } from "@solidjs/web/server-functions/client";
@@ -19,7 +21,7 @@ import { provideRequestEvent } from "@solidjs/web/storage";
 import { prerendered as prerenderedServer } from "../src/server.ts";
 import { prerendered as prerenderedClient } from "../src/client.ts";
 import { serverFunctions } from "../src/integration.ts";
-import { CAPTURE_SINK, staticArtifactPath } from "../src/shared.ts";
+import { CAPTURE_SINK, decodeArtifact, staticArtifactPath } from "../src/shared.ts";
 
 let ids = 0;
 const nextId = (label: string) => `test/prerendered.ts#${label}${ids++}`;
@@ -53,7 +55,14 @@ describe("prerendered (server half)", () => {
     const captured: unknown[][] = [];
     globals[CAPTURE_SINK] = { capture: (...entry: unknown[]) => void captured.push(entry) };
     await withEvent(() => getTeam("design"));
-    expect(captured).toEqual([[id, ["design"], { dept: "design", size: 3 }]]);
+    expect(captured).toEqual([
+      [
+        id,
+        ["design"],
+        { dept: "design", size: 3 },
+        `/_server/data/${encodeURIComponent(id)}?args=${encodeURIComponent('["design"]')}`
+      ]
+    ]);
   });
 
   it("awaits the sink before returning, and captures nothing for thrown calls", async () => {
@@ -151,9 +160,12 @@ describe("static round trip through a prerender run", () => {
     }));
 
     // a fake built app: the page render performs the prerendered calls,
-    // the way SSR component code would
+    // the way SSR component code would; the endpoint is the real handler
     const transport = {
-      async fetch(_request: Request) {
+      async fetch(request: Request) {
+        if (new URL(request.url).pathname.startsWith("/_server/")) {
+          return handleServerFunctionRequest(request);
+        }
         const [team] = await withEvent(() => Promise.all([getTeam("eng"), getReport()]));
         return new Response(`<html><body>${team.users.join(", ")}</body></html>`, {
           headers: { "content-type": "text/html" }
@@ -173,23 +185,25 @@ describe("static round trip through a prerender run", () => {
     // the sink is gone after teardown
     expect(globals[CAPTURE_SINK]).toBeUndefined();
 
-    // plain results are human-readable JSON on disk
-    const plainText = await readFile(
-      join(outDir, await staticArtifactPath(plainId, ["eng"])),
-      "utf8"
-    );
-    expect(JSON.parse(plainText)).toEqual({ dept: "eng", users: ["ada", "grace"] });
-    // rich results ride the codec's framed encoding
-    const richText = await readFile(join(outDir, await staticArtifactPath(richId, [])), "utf8");
-    expect(richText.startsWith(";0x")).toBe(true);
+    // each artifact is the endpoint's answer: plain results as JSON, rich
+    // ones in the codec's framed encoding — whatever the wire carried
+    const stored = async (path: string) =>
+      decodeArtifact(new Uint8Array(await readFile(join(outDir, path))))!;
+    const plain = await stored(await staticArtifactPath(plainId, ["eng"]));
+    expect(plain.status).toBe(200);
+    expect(JSON.parse(await plain.text())).toEqual({ dept: "eng", users: ["ada", "grace"] });
+    const rich = await stored(await staticArtifactPath(richId, []));
+    expect((await rich.text()).startsWith(";0x")).toBe(true);
 
     // ---- the client, in the STATIC posture (no fallback server), against
     // the written files ----
     posture("static");
+    const requested: string[] = [];
     vi.stubGlobal("fetch", async (url: string | URL) => {
       const pathname = new URL(String(url), "http://localhost").pathname;
+      requested.push(pathname);
       try {
-        return new Response(await readFile(join(outDir, pathname), "utf8"));
+        return new Response(await readFile(join(outDir, pathname)));
       } catch {
         return new Response("not found", { status: 404 });
       }
@@ -204,10 +218,34 @@ describe("static round trip through a prerender run", () => {
     expect(report.asOf.toISOString()).toBe("2026-01-15T00:00:00.000Z");
     expect(report.totals).toBeInstanceOf(Map);
     expect(report.totals.get("eng")).toBe(7);
+    // only artifacts were requested: no server exists
+    expect(requested.every(path => path.startsWith("/_static/"))).toBe(true);
 
     // a call no prerendered page made has no artifact — and no server to
     // fall back to
     await expect(teamClient("marketing")).rejects.toThrow(/No static artifact/);
+  });
+
+  it("treats a host's 200 fallback page as a miss", async () => {
+    posture("hybrid");
+    const id = nextId("spaFallback");
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL | Request) => {
+      const target = new URL(String(url instanceof Request ? url.url : url), "http://localhost");
+      requested.push(target.pathname);
+      if (target.pathname.startsWith("/_static/")) {
+        // what an SPA host or an SSR catch-all answers for a missing file
+        return new Response("<!DOCTYPE html><html></html>", {
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response(JSON.stringify({ live: true }), {
+        headers: { "X-Server-Function-Format": "8" }
+      });
+    });
+    const ref = prerenderedClient(createClientReference(id));
+    expect(await ref("x")).toEqual({ live: true });
+    expect(requested[1]).toMatch(/^\/_server\/data\//);
   });
 
   it("keys artifacts by arguments, not just by function", async () => {
@@ -215,6 +253,9 @@ describe("static round trip through a prerender run", () => {
     const byTag = declare(id, async (tag: string) => ({ tag }));
     const transport = {
       async fetch(request: Request) {
+        if (new URL(request.url).pathname.startsWith("/_server/")) {
+          return handleServerFunctionRequest(request);
+        }
         const tag = new URL(request.url).pathname === "/" ? "a" : "b";
         await withEvent(() => byTag(tag));
         return new Response(`<html><body><a href="/second">next</a></body></html>`, {
@@ -255,7 +296,10 @@ describe("the static-mode guard", () => {
 
   /** A one-page site whose render performs exactly the given prerendered calls. */
   const siteCalling = (calls: () => Promise<unknown>) => ({
-    async fetch() {
+    async fetch(request: Request) {
+      if (new URL(request.url).pathname.startsWith("/_server/")) {
+        return handleServerFunctionRequest(request);
+      }
       await withEvent(calls);
       return new Response("<html></html>", { headers: { "content-type": "text/html" } });
     }

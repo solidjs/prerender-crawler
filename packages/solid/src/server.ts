@@ -2,15 +2,16 @@
 // the GET-declared reference with one extra behavior: while a capture sink
 // is installed (the prerender integration installs one for the duration of
 // the crawl — see ./integration.ts), every executed call is delivered to it as
-// (id, args, settled value), and the delivery is AWAITED so a page's
-// render does not finish before its artifacts are safely captured.
+// (id, args, settled value, GET address), and the delivery is AWAITED so a
+// page's render does not finish before its artifacts are safely captured.
 // Without a sink — dev SSR, a live production server — the wrapper is
 // call-through: the function runs in-process like any direct SSR call.
 import {
   GET,
   SERVER_FUNCTION_INVOKE,
   getServerFunctionMetadata,
-  isServerFunction
+  isServerFunction,
+  serverFunctionUrl
 } from "@solidjs/web/server-functions/server";
 import { getRequestEvent } from "@solidjs/web";
 import type { RequestEvent, ResponseStub } from "@solidjs/web";
@@ -77,6 +78,18 @@ const isTanStackRouter = (router: AnnounceableRouter): router is TanStackRouterL
 
 const SERVER_FUNCTION_METADATA = Symbol.for("solid.ServerFunctionMetadata");
 
+const addressOf = serverFunctionUrl as (fn: unknown, ...args: readonly unknown[]) => string;
+
+/**
+ * The server half of `staticFetch`: there are no artifacts to serve here,
+ * so it is `next` (or the global `fetch`) unchanged — an isomorphic
+ * `configureServerFunctionsClient({ fetch: staticFetch(myFetch) })` costs
+ * the server nothing.
+ */
+export function staticFetch(next?: typeof globalThis.fetch): typeof globalThis.fetch {
+  return next ?? ((input, init) => globalThis.fetch(input, init));
+}
+
 /**
  * Declares a server function PRERENDERED — the server half. Calling the
  * reference during SSR runs the function in-process exactly like a direct
@@ -106,8 +119,9 @@ export function prerendered<A extends readonly unknown[], R>(
     const value = await source[SERVER_FUNCTION_INVOKE](args, options);
     const sink = (globalThis as { [CAPTURE_SINK]?: CaptureSink })[CAPTURE_SINK];
     // awaited so the render that triggered the call cannot outrun the
-    // capture — the prerender run's teardown sees every artifact settled
-    if (sink) await sink.capture(id, args, value);
+    // capture. The address is resolved here, in the app's realm, where the
+    // endpoint is configured: it is what the client's own call requests.
+    if (sink) await sink.capture(id, args, value, addressOf(source, ...args));
     return value as Awaited<R>;
   };
 

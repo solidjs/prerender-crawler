@@ -87,7 +87,15 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     redirects,
     skipped,
     files: emitted,
-    emitFile: file => void emitted.push(file)
+    emitFile: file => void emitted.push(file),
+    // integrations reach the app through the crawl's transport, paced like
+    // a page so a throttle protecting rate-limited APIs covers them too
+    async fetch(input) {
+      await pace();
+      return transport.fetch(
+        input instanceof Request ? input : new Request(new URL(String(input), originUrl))
+      );
+    }
   };
   // A query spelling without a filename of its own has nowhere correct to
   // go: `posts/index.html` is `/posts`, and a static host serves it for

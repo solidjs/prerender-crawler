@@ -216,8 +216,11 @@ interface PrerenderContext {
   skipped: readonly SkippedPage[]; // complete by teardown
   files: readonly EmittedFile[]; // what earlier integrations emitted
   emitFile(file: { filename: string; contents: string | Uint8Array }): void;
+  fetch(input: Request | string | URL): Promise<Response>; // through the crawl's transport
 }
 ```
+
+`fetch` sends a request through the crawl's own transport (paced by `interval`, relative urls resolved against `origin`) and returns the raw response — for capturing what the app answers at an address that is not a page, such as a data endpoint, byte-for-byte as a live client would receive it.
 
 `emitFile` is the channel for artifacts produced during the crawl — captured server-function results, extracted payloads, sitemaps. Filenames resolve against the output directory; `../` or an absolute path lands outside it. Throwing from `teardown` fails the run: the place to verify the crawl produced everything the runtime half will need. `redirects()`, `sitemap()` and `report()` above are the shipped examples, each a formatter over the context; [`@solidjs/prerender`](../solid) is the reference integration with a runtime half.
 

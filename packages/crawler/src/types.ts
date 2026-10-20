@@ -128,6 +128,16 @@ export interface PrerenderContext {
    * it (a build report that should not deploy, say).
    */
   emitFile(file: EmittedFile): void;
+  /**
+   * Sends a request through the crawl's own transport — the same app the
+   * pages render from, paced by `interval` like a page fetch — and returns
+   * the raw response: no redirect handling, no page bookkeeping, nothing
+   * written. A relative url resolves against `origin`. For integrations
+   * that capture what the app answers at an address other than a page (a
+   * data endpoint, a feed), so the artifact is byte-for-byte the live
+   * answer.
+   */
+  fetch(input: Request | string | URL): Promise<Response>;
 }
 
 /** A hook bundle participating in the run without owning any of it. */
