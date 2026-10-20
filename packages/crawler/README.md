@@ -75,6 +75,10 @@ Everything from [`PrerenderOptions`](#engine-options) plus:
 
 The plugin defines this constant in every build environment with the run's `mode`. Runtime code can ask "am I a prerendered build, and which kind" — absent (dev, or a build without the plugin) means live. It's how integrations ship posture-aware client behavior without the app wiring anything.
 
+### `import.meta.env.PRERENDER_BUILD`
+
+The run's `buildId`, defined beside `PRERENDER_MODE` and handed to integrations as `context.buildId`. The plugin mints one per build unless you pass `buildId` (letters, digits, `-`, `_`), for example a commit SHA to make builds reproducible. Integrations version what they emit by it, so a new deploy never serves a previous build's file from a CDN or browser cache.
+
 ## Modes
 
 The one distinction every downstream policy keys on:
@@ -178,6 +182,7 @@ runPrerender({
 | Option                   | Default                                         |                                                                                                                                                                                         |
 | ------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mode`                   | `"static"`                                      | See [Modes](#modes). Decides the `emitPages` default.                                                                                                                                   |
+| `buildId`                | minted by the Vite plugin                       | Names the build; integrations version files by it (`context.buildId`).                                                                                                                  |
 | `pages`                  | `["/"]`                                         | Seeds: strings, `{ path, filename?, emit? }` entries, or a (async) function returning them. Duplicates collapse to one render.                                                          |
 | `crawlLinks`             | `true`                                          | Follow same-origin links in rendered HTML. The only way dynamic routes are discovered without explicit seeding.                                                                         |
 | `hintHeader`             | `"x-prerender"`                                 | Response header naming additional paths (comma-separated). See [Announcing pages](#announcing-pages).                                                                                   |

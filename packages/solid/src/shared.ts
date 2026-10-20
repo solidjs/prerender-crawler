@@ -116,20 +116,31 @@ export async function staticCallKey(id: string, args: readonly unknown[]): Promi
 
 /**
  * The artifact's path relative to the static output root:
- * `_static/<label>.<key>.txt`. The label is a sanitized slice of the
- * function id — for humans reading a build output or a network tab; the
- * key alone carries the identity. `.txt` so static hosts serve it as text,
- * which they compress.
+ * `_static/<build>/<label>.<key>.txt`. The build directory (the crawl's
+ * `buildId`, `import.meta.env.PRERENDER_BUILD` on the client) keeps every
+ * deploy's artifacts at urls of their own, so they cache as immutable; a
+ * build without one writes `_static/<label>.<key>.txt`. The label is a
+ * sanitized slice of the function id — for humans reading a build output
+ * or a network tab; the key alone carries the identity. `.txt` so static
+ * hosts serve it as text, which they compress.
  */
-export function staticArtifactPathSync(id: string, args: readonly unknown[]): string {
+export function staticArtifactPathSync(
+  id: string,
+  args: readonly unknown[],
+  build?: string
+): string {
   const key = staticCallKeySync(id, args);
   const label = id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48);
-  return `${ARTIFACT_DIR}/${label ? label + "." : ""}${key}.txt`;
+  return `${ARTIFACT_DIR}/${build ? build + "/" : ""}${label ? label + "." : ""}${key}.txt`;
 }
 
 /** `staticArtifactPathSync`, as a promise (the original public shape). */
-export async function staticArtifactPath(id: string, args: readonly unknown[]): Promise<string> {
-  return staticArtifactPathSync(id, args);
+export async function staticArtifactPath(
+  id: string,
+  args: readonly unknown[],
+  build?: string
+): Promise<string> {
+  return staticArtifactPathSync(id, args, build);
 }
 
 // SHA-256 (FIPS 180-4), synchronous and dependency-free — see

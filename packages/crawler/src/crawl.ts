@@ -53,6 +53,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     transport,
     outDir,
     mode = "static",
+    buildId,
     crawlLinks = true,
     hintHeader = "x-prerender",
     filter,
@@ -73,6 +74,9 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
     redirectStubs = !integrations.some(integration => integration.handlesRedirects)
   } = options;
 
+  if (buildId !== undefined && !/^[\w-]+$/.test(buildId)) {
+    throw new Error(`buildId must be letters, digits, "-" or "_" (got ${JSON.stringify(buildId)})`);
+  }
   const originUrl = new URL(origin);
   const links: LinkOptions = { keepQuery };
   const rendered: RenderedPage[] = [];
@@ -81,6 +85,7 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
   const emitted: EmittedFile[] = [];
   const context: PrerenderContext = {
     mode,
+    buildId,
     origin,
     outDir,
     pages: rendered,

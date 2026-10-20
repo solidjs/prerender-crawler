@@ -39,7 +39,7 @@ export const getPost = query(
 ```
 
 - **Implies `GET`.** A prerendered call is by definition a safe read. Outside a prerendered build — the dev server, or a build without the prerender plugin — the reference behaves exactly like `GET(fn)`, so the app still works against a live server. Dev stays fullstack; production is static.
-- **Arguments are the address.** Each call identity (function id + arguments) becomes one artifact under `_static/`. Both the build and the client derive the key from the arguments, so they must be JSON-safe and spell identically in both realms.
+- **Arguments are the address.** Each call identity (function id + arguments) becomes one artifact under `_static/<build>/`, versioned by the build so a deploy never shares an artifact URL with the previous one (serve `_static/` as immutable). Both the build and the client derive the key from the arguments, so they must be JSON-safe and spell identically in both realms.
 - **Results are unrestricted.** The artifact is the live answer: the build asks the app's own server-function endpoint for each call it captured and stores the response, headers included. Plain data, rich values (Dates, Maps, typed errors) and server components (`return props => <jsx/>`) all come back exactly as a live call would deliver them.
 - **The reference is the runtime's own.** In a prerendered build the client still calls through Solid's transport, so hydration adopts server-rendered reads and server components without a request; only the send is answered from `_static/` (see [`staticFetch`](#staticfetchnext)).
 - **Only calls the build made have artifacts.** In a static build, a client calling with arguments no prerendered page used gets a rejected call (there is no server). In a hybrid build the call falls back to the live server.
@@ -101,7 +101,7 @@ The client learns the posture from `import.meta.env.PRERENDER_MODE`, which the c
 
 ## `staticFetch(next?)`
 
-The transport `fetch` that answers prerendered calls from their artifacts. `prerendered()` installs it on its own in a prerendered build. An app that configures its own transport `fetch` must pass it through, or the artifacts are bypassed:
+The transport `fetch` that answers prerendered calls from their artifacts. `prerendered()` installs this behavior on its own in a prerendered build. On a `@solidjs/web` that exports `wrapServerFunctionsFetch` (solidjs/solid#4170) it is a send layer, so it composes with any transport `fetch` the app configures, before or after. On older runtimes it is the transport `fetch` itself, and an app that configures its own must pass it through, or the artifacts are bypassed:
 
 ```ts
 import { configureServerFunctionsClient } from "@solidjs/web/server-functions";
@@ -110,12 +110,14 @@ import { staticFetch } from "@solidjs/prerender";
 configureServerFunctionsClient({ fetch: staticFetch(myFetch) });
 ```
 
+Under the layer that line is harmless (it passes straight to `myFetch`), so it can stay while you upgrade.
+
 Anything that is not a prerendered call's GET address goes to `next` untouched, and on the server it is `next` unchanged. A host answering a missing artifact with a 200 page (an SPA fallback, an SSR catch-all) is still a miss: artifacts are recognized by their first line, not by status.
 
 ## Other exports
 
 - `solidRouterPages(router | routes, { base? })`, `tanstackRouterPages(router)` — the static-page enumerators behind `announceRoutes`, pure and isomorphic.
-- `staticCallKey(id, args)` / `staticArtifactPath(id, args)` — the artifact key derivation (`_static/<label>.<key>.txt`), for tooling that needs to locate an artifact.
+- `staticCallKey(id, args)` / `staticArtifactPath(id, args, build?)` — the artifact key derivation (`_static/<build>/<label>.<key>.txt`), for tooling that needs to locate an artifact.
 - Types: `PrerenderedFunction`, `AnnounceableRouter`, `AnnounceRoutesOptions`, `SolidRouterLike`, `SolidRouteLike`, `TanStackRouterLike`, `ServerFunctionsIntegration`, `ServerFunctionsIntegrationOptions`, `CaptureSink` (server).
 
 ## License

@@ -87,6 +87,14 @@ describe("staticArtifactPath", () => {
     expect(await staticArtifactPath("///", [])).toMatch(/^_static\/___\.[0-9a-f]{32}\.txt$/);
     expect(await staticArtifactPath("", [])).toMatch(/^_static\/[0-9a-f]{32}\.txt$/);
   });
+
+  it("nests under the build's directory when given one", async () => {
+    const path = await staticArtifactPath("getUsers", ["eng"], "b1");
+    expect(path).toMatch(/^_static\/b1\/getUsers\.[0-9a-f]{32}\.txt$/);
+    expect(path.slice("_static/b1/".length)).toBe(
+      (await staticArtifactPath("getUsers", ["eng"])).slice("_static/".length)
+    );
+  });
 });
 
 describe("artifacts", () => {

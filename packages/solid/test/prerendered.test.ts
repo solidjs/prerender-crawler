@@ -15,13 +15,17 @@ import {
   handleServerFunctionRequest,
   registerServerReference
 } from "@solidjs/web/server-functions/server";
-import { createServerReference as createClientReference } from "@solidjs/web/server-functions/client";
+import * as clientTransport from "@solidjs/web/server-functions/client";
+import {
+  configureServerFunctionsClient,
+  createServerReference as createClientReference
+} from "@solidjs/web/server-functions/client";
 import { createRequestEvent } from "@solidjs/web";
 import { provideRequestEvent } from "@solidjs/web/storage";
 import { prerendered as prerenderedServer } from "../src/server.ts";
 import { prerendered as prerenderedClient } from "../src/client.ts";
 import { serverFunctions } from "../src/integration.ts";
-import { CAPTURE_SINK, decodeArtifact, staticArtifactPath } from "../src/shared.ts";
+import { CAPTURE_SINK, decodeArtifact, encodeArtifact, staticArtifactPath } from "../src/shared.ts";
 
 let ids = 0;
 const nextId = (label: string) => `test/prerendered.ts#${label}${ids++}`;
@@ -130,6 +134,36 @@ describe("prerendered (client half, hybrid posture)", () => {
     expect(requested[1]).toBe(`/_server/data/${encodeURIComponent(id)}`); // then live
   });
 
+  // needs a runtime with send layers (solidjs/solid#4170)
+  it.skipIf(!("wrapServerFunctionsFetch" in clientTransport))(
+    "keeps serving artifacts when the app configures its own fetch afterwards",
+    async () => {
+      posture("hybrid");
+      const id = nextId("appFetch");
+      const artifact = await encodeArtifact(
+        new Response(JSON.stringify({ baked: true }), {
+          headers: { "X-Server-Function-Format": "8" }
+        })
+      );
+      vi.stubGlobal("fetch", async () => new Response(artifact));
+      const ref = prerenderedClient(createClientReference(id));
+      // the app's own transport fetch, configured after prerendered() ran
+      const appSends: string[] = [];
+      configureServerFunctionsClient({
+        fetch: (address, init) => {
+          appSends.push(address);
+          return globalThis.fetch(address, init);
+        }
+      });
+      try {
+        expect(await ref("x")).toEqual({ baked: true });
+        expect(appSends).toEqual([]); // answered by the layer, never displaced
+      } finally {
+        configureServerFunctionsClient({ fetch: null });
+      }
+    }
+  );
+
   it("errors on a miss in the static posture (no fallback)", async () => {
     posture("static"); // nobody to fall back to
     vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
@@ -175,13 +209,16 @@ describe("static round trip through a prerender run", () => {
     const result = await runPrerender({
       transport,
       outDir,
+      buildId: "b1",
       crawlLinks: false,
       integrations: [serverFunctions()]
     });
     expect(result.pages).toHaveLength(1);
-    expect(result.files.map(f => f.filename).sort()).toEqual(
-      [await staticArtifactPath(plainId, ["eng"]), await staticArtifactPath(richId, [])].sort()
-    );
+    const plainPath = await staticArtifactPath(plainId, ["eng"], "b1");
+    const richPath = await staticArtifactPath(richId, [], "b1");
+    // versioned by the build: a deploy never shares an artifact url
+    expect(plainPath.startsWith("_static/b1/")).toBe(true);
+    expect(result.files.map(f => f.filename).sort()).toEqual([plainPath, richPath].sort());
     // the sink is gone after teardown
     expect(globals[CAPTURE_SINK]).toBeUndefined();
 
@@ -189,15 +226,16 @@ describe("static round trip through a prerender run", () => {
     // ones in the codec's framed encoding — whatever the wire carried
     const stored = async (path: string) =>
       decodeArtifact(new Uint8Array(await readFile(join(outDir, path))))!;
-    const plain = await stored(await staticArtifactPath(plainId, ["eng"]));
+    const plain = await stored(plainPath);
     expect(plain.status).toBe(200);
     expect(JSON.parse(await plain.text())).toEqual({ dept: "eng", users: ["ada", "grace"] });
-    const rich = await stored(await staticArtifactPath(richId, []));
+    const rich = await stored(richPath);
     expect((await rich.text()).startsWith(";0x")).toBe(true);
 
     // ---- the client, in the STATIC posture (no fallback server), against
     // the written files ----
     posture("static");
+    vi.stubEnv("PRERENDER_BUILD", "b1");
     const requested: string[] = [];
     vi.stubGlobal("fetch", async (url: string | URL) => {
       const pathname = new URL(String(url), "http://localhost").pathname;
@@ -219,7 +257,7 @@ describe("static round trip through a prerender run", () => {
     expect(report.totals).toBeInstanceOf(Map);
     expect(report.totals.get("eng")).toBe(7);
     // only artifacts were requested: no server exists
-    expect(requested.every(path => path.startsWith("/_static/"))).toBe(true);
+    expect(requested.every(path => path.startsWith("/_static/b1/"))).toBe(true);
 
     // a call no prerendered page made has no artifact — and no server to
     // fall back to

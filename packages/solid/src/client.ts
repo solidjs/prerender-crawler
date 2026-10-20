@@ -21,6 +21,7 @@ import {
   isServerFunction,
   withMeta
 } from "@solidjs/web/server-functions/client";
+import * as transport from "@solidjs/web/server-functions/client";
 import {
   PRERENDERED_META_KEY,
   decodeArtifact,
@@ -56,6 +57,7 @@ export function announceRoutes(
 interface Posture {
   mode: "static" | "hybrid" | undefined;
   base: string;
+  build: string | undefined;
 }
 
 // Read at call time, not module scope: a build replaces both expressions
@@ -67,7 +69,8 @@ function posture(): Posture {
   const mode = env?.PRERENDER_MODE;
   return {
     mode: mode === "static" || mode === "hybrid" ? mode : undefined,
-    base: typeof env?.BASE_URL === "string" ? env.BASE_URL : "/"
+    base: typeof env?.BASE_URL === "string" ? env.BASE_URL : "/",
+    build: typeof env?.PRERENDER_BUILD === "string" ? env.PRERENDER_BUILD : undefined
   };
 }
 
@@ -75,18 +78,35 @@ function posture(): Posture {
 // answers from artifacts.
 const prerenderedIds = new Set<string>();
 let installed = false;
+// whether the artifacts are served by a send layer (`wrapServerFunctionsFetch`,
+// a runtime with `wrapServerFunctionsFetch`, solidjs/solid#4170), which no app `fetch` can displace
+let layered = false;
 
 type Fetch = typeof globalThis.fetch;
 
+// read off the namespace: older runtimes lack it, and a named import of a
+// missing export fails the app's build
+const wrapSend = (
+  transport as typeof transport & {
+    wrapServerFunctionsFetch?: (wrap: (next: Fetch) => Fetch) => void;
+  }
+).wrapServerFunctionsFetch;
+
 /**
  * The transport `fetch` that serves prerendered calls from their static
- * artifacts. `prerendered()` installs it on its own in a prerendered build;
- * an app that configures its own transport `fetch` passes that one through
- * it instead, so both apply:
+ * artifacts. `prerendered()` installs the same behavior on its own in a
+ * prerendered build: on a runtime that exports `wrapServerFunctionsFetch`
+ * (solidjs/solid#4170), as a send layer, which composes with any `fetch` the app
+ * configures in either order. On older runtimes it is the transport
+ * `fetch` itself, and an app that configures its own must pass it through,
+ * or the artifacts are bypassed:
  *
  * ```ts
  * configureServerFunctionsClient({ fetch: staticFetch(myFetch) });
  * ```
+ *
+ * With the layer in place this hands back `myFetch`'s behavior unchanged,
+ * so the line is safe to keep either way.
  *
  * Requests that are not a prerendered call's GET address — and every
  * request outside a prerendered build — go to `next` untouched. The
@@ -96,11 +116,18 @@ type Fetch = typeof globalThis.fetch;
  */
 export function staticFetch(next?: Fetch): Fetch {
   installed = true;
+  return serveArtifacts(next, false);
+}
+
+function serveArtifacts(next: Fetch | undefined, layer: boolean): Fetch {
   // read at call time: hydration swaps the global for the length of a
   // synchronous trace, and a test may stub it
   const send: Fetch = (input, init) => (next ?? globalThis.fetch)(input, init);
   return (input, init) => {
-    const { mode, base } = posture();
+    // once the layer serves the artifacts (ahead of whatever `fetch` the app
+    // configures, read at call time), an app-installed copy only passes on
+    if (layered && !layer) return send(input, init);
+    const { mode, base, build } = posture();
     const url = input instanceof Request ? input.url : String(input);
     const method = (
       init?.method ?? (input instanceof Request ? input.method : "GET")
@@ -109,7 +136,7 @@ export function staticFetch(next?: Fetch): Fetch {
     if (!call || !prerenderedIds.has(call.id)) return send(input, init);
     let path: string;
     try {
-      path = staticArtifactPathSync(call.id, call.args);
+      path = staticArtifactPathSync(call.id, call.args, build);
     } catch {
       return send(input, init); // arguments that cannot address an artifact
     }
@@ -177,7 +204,12 @@ export function prerendered<A extends readonly unknown[], R>(
     getServerFunctionMetadata(fn)?.method === "GET" ? fn : GET(fn as (...args: any[]) => any);
   if (posture().mode !== undefined) {
     prerenderedIds.add(source.id);
-    if (!installed) configureServerFunctionsClient({ fetch: staticFetch() });
+    if (wrapSend) {
+      if (!layered) {
+        layered = true;
+        wrapSend(next => serveArtifacts(next, true));
+      }
+    } else if (!installed) configureServerFunctionsClient({ fetch: staticFetch() });
   }
   // the reference IS the runtime's GET reference, branded so integrations
   // can detect the declaration

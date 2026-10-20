@@ -18,7 +18,9 @@
 //    Pages and integration-emitted files land in the client output.
 // 2. Posture: `import.meta.env.PRERENDER_MODE` is defined in every build
 //    environment so runtime code can ask "am I a prerendered build, and of
-//    which kind" — the one bit of client-side knowledge integrations need.
+//    which kind" — the one bit of client-side knowledge integrations need —
+//    and `import.meta.env.PRERENDER_BUILD` names the build, so files an
+//    integration versions by it resolve to the same urls on both sides.
 //    Absent (dev, or a build without this plugin) means "live".
 import path from "node:path";
 import type { Plugin } from "vite";
@@ -41,6 +43,8 @@ export type * from "./types.ts";
 
 /** The `import.meta.env` key the plugin defines with the build's `PrerenderMode`. */
 export const PRERENDER_MODE_ENV = "PRERENDER_MODE";
+/** The `import.meta.env` key the plugin defines with the build's `buildId`. */
+export const PRERENDER_BUILD_ENV = "PRERENDER_BUILD";
 
 export interface PrerenderPluginOptions extends PrerenderOptions {
   /**
@@ -67,6 +71,11 @@ export interface PrerenderPluginOptions extends PrerenderOptions {
  */
 export function prerender(options: PrerenderPluginOptions = {}): Plugin {
   const mode = options.mode ?? "static";
+  // One id for every environment and the crawl: the client derives artifact
+  // urls from it, the integrations write under it. Minted per process, not
+  // per plugin instance: a build may evaluate the config (and so call
+  // `prerender()`) more than once, and every instance must agree.
+  const buildId = options.buildId ?? (processBuild[BUILD_ID] ??= mintBuildId());
 
   return {
     name: "prerender",
@@ -76,7 +85,12 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
       // too, so `import.meta.env.PRERENDER_MODE` and `import.meta.env`
       // destructuring both see it. Every environment gets it: the server
       // build may legitimately ask as well.
-      return { define: { [`import.meta.env.${PRERENDER_MODE_ENV}`]: JSON.stringify(mode) } };
+      return {
+        define: {
+          [`import.meta.env.${PRERENDER_MODE_ENV}`]: JSON.stringify(mode),
+          [`import.meta.env.${PRERENDER_BUILD_ENV}`]: JSON.stringify(buildId)
+        }
+      };
     },
     buildApp: {
       order: "post",
@@ -115,7 +129,13 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
           );
         }
         const { serverEntry: _entry, ...crawl } = options;
-        const result = await runPrerender({ ...crawl, mode, transport, outDir: clientOut });
+        const result = await runPrerender({
+          ...crawl,
+          mode,
+          buildId,
+          transport,
+          outDir: clientOut
+        });
 
         const written = result.pages.filter(page => page.emitted).length;
         const redirected = result.redirects.length
@@ -132,5 +152,9 @@ export function prerender(options: PrerenderPluginOptions = {}): Plugin {
     }
   };
 }
+
+const BUILD_ID = Symbol.for("prerender-crawler.buildId");
+const processBuild = globalThis as { [BUILD_ID]?: string };
+const mintBuildId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));

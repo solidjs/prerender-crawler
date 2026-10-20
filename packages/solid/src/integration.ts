@@ -74,11 +74,11 @@ export function serverFunctions(
   return {
     name: "solid:server-functions",
     captured,
-    setup() {
+    setup(context) {
       globals[CAPTURE_SINK] = {
         capture(id, args, _value, url) {
           captured.add(id);
-          const filename = staticArtifactPathSync(id, args);
+          const filename = staticArtifactPathSync(id, args, context.buildId);
           if (!calls.has(filename)) calls.set(filename, url);
         }
       };

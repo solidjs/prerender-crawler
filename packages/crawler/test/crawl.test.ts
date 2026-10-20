@@ -400,6 +400,33 @@ describe("crawl", () => {
     expect(result.pages.map(page => page.path)).toEqual(["/"]);
   });
 
+  it("hands integrations the build id, and rejects one that is not path-safe", async () => {
+    const seen: (string | undefined)[] = [];
+    const probe = {
+      name: "probe",
+      setup: (context: { buildId?: string }) => void seen.push(context.buildId)
+    };
+    await runPrerender({
+      transport: site({ "/": html("a") }).transport,
+      outDir: await makeOutDir(),
+      integrations: [probe]
+    });
+    await runPrerender({
+      transport: site({ "/": html("a") }).transport,
+      outDir: await makeOutDir(),
+      buildId: "b1",
+      integrations: [probe]
+    });
+    expect(seen).toEqual([undefined, "b1"]);
+    await expect(
+      runPrerender({
+        transport: site({ "/": html("a") }).transport,
+        outDir: await makeOutDir(),
+        buildId: "../x"
+      })
+    ).rejects.toThrow(/buildId/);
+  });
+
   it("renders without writing when emission is off, per-entry flags override", async () => {
     const { transport, requests } = site({
       "/": html(`<a href="/data-only">d</a>`),
