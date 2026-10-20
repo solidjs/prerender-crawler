@@ -101,7 +101,9 @@ The client learns the posture from `import.meta.env.PRERENDER_MODE`, which the c
 
 ## `staticFetch(next?)`
 
-The transport `fetch` that answers prerendered calls from their artifacts. `prerendered()` installs this behavior on its own in a prerendered build. On a `@solidjs/web` that exports `wrapServerFunctionsFetch` (solidjs/solid#4170) it is a send layer, so it composes with any transport `fetch` the app configures, before or after. On older runtimes it is the transport `fetch` itself, and an app that configures its own must pass it through, or the artifacts are bypassed:
+A prerendered reference declares its own send (`withMeta(fn, { fetch })`, solidjs/solid#4170): the runtime calls it for that function's requests and passes the app's transport `fetch` as `next`, so your `configureServerFunctionsClient({ fetch })` stays yours and the live fallback in hybrid goes through it. Nothing needs wiring.
+
+On a `@solidjs/web` without reference sends, wire the artifact transport by hand once, passing your own transport `fetch` through it if you have one, or the artifacts are bypassed:
 
 ```ts
 import { configureServerFunctionsClient } from "@solidjs/web/server-functions";
@@ -110,7 +112,7 @@ import { staticFetch } from "@solidjs/prerender";
 configureServerFunctionsClient({ fetch: staticFetch(myFetch) });
 ```
 
-Under the layer that line is harmless (it passes straight to `myFetch`), so it can stay while you upgrade.
+On current runtimes that line is harmless (it passes straight to `myFetch`), so it can stay while you upgrade.
 
 Anything that is not a prerendered call's GET address goes to `next` untouched, and on the server it is `next` unchanged. A host answering a missing artifact with a 200 page (an SPA fallback, an SSR catch-all) is still a miss: artifacts are recognized by their first line, not by status.
 

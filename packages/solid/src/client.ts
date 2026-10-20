@@ -9,19 +9,19 @@
 //   `prerender-crawler/vite`, which defines the constant): the reference is
 //   STILL the runtime's own GET reference — the call path, hydration
 //   adoption, server-component interception and response decoding are all
-//   the runtime's. Only the send changes: `staticFetch`, installed as the
-//   transport's `fetch`, answers a prerendered call's GET address with its
-//   artifact from `_static/` (the live answer the build captured, headers
-//   and all). On a miss, hybrid sends the original request (a server is
-//   deployed); static has nobody to fall back to and throws.
+//   the runtime's. Only the send changes: the reference declares its own
+//   (`withMeta(fn, { fetch })`), which answers the call's GET address with
+//   its artifact from `_static/` (the live answer the build captured,
+//   headers and all) and leaves the app's transport `fetch` alone. On a
+//   miss, hybrid sends the original request through the app's send (a
+//   server is deployed); static has nobody to fall back to and throws.
+//   Runtimes without reference sends wire `staticFetch` instead.
 import {
   GET,
-  configureServerFunctionsClient,
   getServerFunctionMetadata,
   isServerFunction,
   withMeta
 } from "@solidjs/web/server-functions/client";
-import * as transport from "@solidjs/web/server-functions/client";
 import {
   PRERENDERED_META_KEY,
   decodeArtifact,
@@ -77,36 +77,26 @@ function posture(): Posture {
 // Ids declared prerendered in this realm: the only calls `staticFetch`
 // answers from artifacts.
 const prerenderedIds = new Set<string>();
-let installed = false;
-// whether the artifacts are served by a send layer (`wrapServerFunctionsFetch`,
-// a runtime with `wrapServerFunctionsFetch`, solidjs/solid#4170), which no app `fetch` can displace
-let layered = false;
+// The inits a reference's own send already looked up: a `staticFetch` the
+// app installed under it passes them on instead of looking again.
+const lookedUp = new WeakSet<object>();
 
 type Fetch = typeof globalThis.fetch;
-
-// read off the namespace: older runtimes lack it, and a named import of a
-// missing export fails the app's build
-const wrapSend = (
-  transport as typeof transport & {
-    wrapServerFunctionsFetch?: (wrap: (next: Fetch) => Fetch) => void;
-  }
-).wrapServerFunctionsFetch;
+type Send = (input: string, init: RequestInit) => Response | Promise<Response>;
 
 /**
  * The transport `fetch` that serves prerendered calls from their static
- * artifacts. `prerendered()` installs the same behavior on its own in a
- * prerendered build: on a runtime that exports `wrapServerFunctionsFetch`
- * (solidjs/solid#4170), as a send layer, which composes with any `fetch` the app
- * configures in either order. On older runtimes it is the transport
- * `fetch` itself, and an app that configures its own must pass it through,
- * or the artifacts are bypassed:
+ * artifacts, for runtimes whose references cannot declare their own send
+ * (`@solidjs/web` before solidjs/solid#4170). There, configure it once,
+ * passing your own transport `fetch` through it if you have one:
  *
  * ```ts
  * configureServerFunctionsClient({ fetch: staticFetch(myFetch) });
  * ```
  *
- * With the layer in place this hands back `myFetch`'s behavior unchanged,
- * so the line is safe to keep either way.
+ * On current runtimes `prerendered()` declares the artifact send on the
+ * reference itself (`withMeta(fn, { fetch })`), so nothing needs wiring and
+ * this line, if kept, just passes through to `myFetch`.
  *
  * Requests that are not a prerendered call's GET address — and every
  * request outside a prerendered build — go to `next` untouched. The
@@ -115,49 +105,61 @@ const wrapSend = (
  * synchronously, so keys are derived without an await.
  */
 export function staticFetch(next?: Fetch): Fetch {
-  installed = true;
-  return serveArtifacts(next, false);
-}
-
-function serveArtifacts(next: Fetch | undefined, layer: boolean): Fetch {
   // read at call time: hydration swaps the global for the length of a
   // synchronous trace, and a test may stub it
   const send: Fetch = (input, init) => (next ?? globalThis.fetch)(input, init);
   return (input, init) => {
-    // once the layer serves the artifacts (ahead of whatever `fetch` the app
-    // configures, read at call time), an app-installed copy only passes on
-    if (layered && !layer) return send(input, init);
-    const { mode, base, build } = posture();
+    if (init && lookedUp.has(init)) return send(input, init);
     const url = input instanceof Request ? input.url : String(input);
     const method = (
       init?.method ?? (input instanceof Request ? input.method : "GET")
     ).toUpperCase();
-    const call = mode && method === "GET" ? parseDataAddress(url) : undefined;
-    if (!call || !prerenderedIds.has(call.id)) return send(input, init);
-    let path: string;
-    try {
-      path = staticArtifactPathSync(call.id, call.args, build);
-    } catch {
-      return send(input, init); // arguments that cannot address an artifact
-    }
-    const artifactUrl = base.endsWith("/") ? base + path : `${base}/${path}`;
-    const signal = init?.signal ?? undefined;
-    return globalThis.fetch(artifactUrl, signal ? { signal } : undefined).then(async response => {
-      const answer = response.ok
-        ? decodeArtifact(new Uint8Array(await response.arrayBuffer()))
-        : undefined;
-      if (answer) return answer;
-      // hybrid deployed a live server: a call the build never made is an
-      // ordinary GET dispatch, not a failure. Static has nobody to ask.
-      if (mode === "hybrid") return send(input, init);
-      throw new Error(
-        `No static artifact for this call of "${call.id}" (${artifactUrl} answered ` +
-          `${response.status}${response.ok ? " without an artifact" : ""}): only calls made ` +
-          `during prerendering are captured. Prerender a page that performs this call (same ` +
-          `arguments), or make the function a live server function.`
-      );
-    });
+    return serveArtifact(url, method, init, send as Send) ?? send(input, init);
   };
+}
+
+// The send `prerendered()` declares on its reference: the runtime calls it
+// for that function's requests, with the app's configured send as `next`.
+const referenceSend = (address: string, init: RequestInit, next: Send) => {
+  lookedUp.add(init);
+  return (
+    serveArtifact(address, (init.method ?? "GET").toUpperCase(), init, next) ?? next(address, init)
+  );
+};
+
+/** Answers a prerendered call's GET address from its artifact; undefined for any other request. */
+function serveArtifact(
+  url: string,
+  method: string,
+  init: RequestInit | undefined,
+  send: Send
+): Promise<Response> | undefined {
+  const { mode, base, build } = posture();
+  const call = mode && method === "GET" ? parseDataAddress(url) : undefined;
+  if (!call || !prerenderedIds.has(call.id)) return;
+  let path: string;
+  try {
+    path = staticArtifactPathSync(call.id, call.args, build);
+  } catch {
+    return; // arguments that cannot address an artifact
+  }
+  const artifactUrl = base.endsWith("/") ? base + path : `${base}/${path}`;
+  const signal = init?.signal ?? undefined;
+  return globalThis.fetch(artifactUrl, signal ? { signal } : undefined).then(async response => {
+    const answer = response.ok
+      ? decodeArtifact(new Uint8Array(await response.arrayBuffer()))
+      : undefined;
+    if (answer) return answer;
+    // hybrid deployed a live server: a call the build never made is an
+    // ordinary GET dispatch, not a failure. Static has nobody to ask.
+    if (mode === "hybrid") return send(url, init ?? {});
+    throw new Error(
+      `No static artifact for this call of "${call.id}" (${artifactUrl} answered ` +
+        `${response.status}${response.ok ? " without an artifact" : ""}): only calls made ` +
+        `during prerendering are captured. Prerender a page that performs this call (same ` +
+        `arguments), or make the function a live server function.`
+    );
+  });
 }
 
 /**
@@ -202,16 +204,13 @@ export function prerendered<A extends readonly unknown[], R>(
   // builds; an already-GET-declared reference is adopted as-is.
   const source: any =
     getServerFunctionMetadata(fn)?.method === "GET" ? fn : GET(fn as (...args: any[]) => any);
+  const meta: Record<string, unknown> = { [PRERENDERED_META_KEY]: true };
   if (posture().mode !== undefined) {
     prerenderedIds.add(source.id);
-    if (wrapSend) {
-      if (!layered) {
-        layered = true;
-        wrapSend(next => serveArtifacts(next, true));
-      }
-    } else if (!installed) configureServerFunctionsClient({ fetch: staticFetch() });
+    // the reference's own send: the app's transport `fetch` stays the app's
+    meta.fetch = referenceSend;
   }
   // the reference IS the runtime's GET reference, branded so integrations
   // can detect the declaration
-  return withMeta(source, { [PRERENDERED_META_KEY]: true }) as PrerenderedFunction<A, Awaited<R>>;
+  return withMeta(source, meta) as PrerenderedFunction<A, Awaited<R>>;
 }
