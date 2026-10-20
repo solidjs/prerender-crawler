@@ -1,5 +1,5 @@
 // The data layer: server functions declared PRERENDERED. Each call a page
-// makes during the build is captured as a static JSON artifact
+// makes during the build is captured as a static artifact
 // (dist/client/_static/…) keyed by the call's identity — function +
 // arguments. In the built site, calling these fetches the artifact; no
 // server runs anywhere. In dev they are ordinary live server functions.

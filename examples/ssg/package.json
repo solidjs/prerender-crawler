@@ -13,14 +13,14 @@
   "dependencies": {
     "@solidjs/meta": "^1.0.0-next.2",
     "@solidjs/prerender": "workspace:*",
-    "@solidjs/router": "^2.0.0-next.21",
-    "@solidjs/web": "^2.0.0-rc.6",
+    "@solidjs/router": "^2.0.0-next.41",
+    "@solidjs/web": "^2.0.0-rc.16",
     "prerender-crawler": "workspace:*",
-    "solid-js": "^2.0.0-rc.6"
+    "solid-js": "^2.0.0-rc.16"
   },
   "devDependencies": {
-    "@solidjs/vite-plugin": "^3.0.0-next.39",
-    "filesystem-routing": "0.2.1",
+    "@solidjs/vite-plugin": "^3.0.0-next.50",
+    "filesystem-routing": "0.4.0",
     "typescript": "^5.9.2",
     "vite": "^8.1.5"
   }

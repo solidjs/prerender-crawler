@@ -7,11 +7,13 @@
 // 1. Capture. A sink installed for the crawl's duration (a registered-symbol
 //    global — the crawl is in-process, so the built server bundle and this
 //    module share a realm) collects every `prerendered` call the renders
-//    execute, encodes each first-seen call once, and emits the artifacts
-//    after the crawl. Encoding mirrors the wire's format negotiation:
-//    JSON-safe results as plain JSON, everything else through the codec's
-//    framed encoding (`;0x` prefix), which is exactly what the client half
-//    sniffs.
+//    execute, one per call identity. After the crawl each one's GET address
+//    is replayed through the app (`context.fetch`, the crawl's own
+//    transport) and the endpoint's answer — status, headers, body — is the
+//    artifact. Storing the live answer rather than encoding the value here
+//    means the server's own result policies run: codec payloads, and
+//    server components, whose value is a render function only the frames
+//    transform turns into a body.
 // 2. The guard. `@solidjs/vite-plugin` records every server function the
 //    CLIENT build can dispatch (by wire id) in its persisted manifest. After
 //    the crawl, ids nothing captured are calls a static deployment has no
@@ -20,17 +22,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { PrerenderContext, PrerenderIntegration } from "prerender-crawler";
-import { CAPTURE_SINK, canonicalJSON, staticArtifactPath } from "./shared.ts";
+import { CAPTURE_SINK, encodeArtifact, staticArtifactPathSync } from "./shared.ts";
 import type { CaptureSink } from "./shared.ts";
 
 export interface ServerFunctionsIntegrationOptions {
-  /**
-   * Codec options for encoding artifacts that carry rich (non-JSON-safe)
-   * results. Must match the CLIENT's configured codec
-   * (`configureServerFunctionsClient({ codec })`) — the artifact is decoded
-   * there. Plain JSON-safe results never touch the codec.
-   */
-  codec?: unknown;
   /**
    * What to do when the client build references server functions the crawl
    * never captured — calls a static deployment cannot answer (no server),
@@ -71,33 +66,39 @@ interface PersistedManifest {
 export function serverFunctions(
   options: ServerFunctionsIntegrationOptions = {}
 ): ServerFunctionsIntegration {
-  const artifacts = new Map<string, Promise<string>>();
+  // artifact filename -> the GET address its call requests; one entry per
+  // call identity however many pages make the call
+  const calls = new Map<string, string>();
   const captured = new Set<string>();
   const globals = globalThis as { [CAPTURE_SINK]?: CaptureSink };
   return {
     name: "solid:server-functions",
     captured,
-    setup() {
+    setup(context) {
       globals[CAPTURE_SINK] = {
-        async capture(id, args, value) {
+        capture(id, args, _value, url) {
           captured.add(id);
-          const filename = await staticArtifactPath(id, args);
-          // one call identity, one artifact: the same call captured on many
-          // pages encodes once, and every capture awaits the same settle
-          let payload = artifacts.get(filename);
-          if (!payload) {
-            payload = encodeArtifact(value, options.codec);
-            artifacts.set(filename, payload);
-          }
-          await payload;
+          const filename = staticArtifactPathSync(id, args, context.buildId);
+          if (!calls.has(filename)) calls.set(filename, url);
         }
       };
     },
     async teardown(context) {
+      // removed before replaying: a replay runs the function again, and
+      // that run is not a page's call
       delete globals[CAPTURE_SINK];
       guard(context, captured, options.uncaptured);
-      for (const [filename, payload] of artifacts) {
-        context.emitFile({ filename, contents: await payload });
+      for (const [filename, url] of calls) {
+        const response = await context.fetch(url);
+        if (!response.ok) {
+          throw new Error(
+            `[@solidjs/prerender] capturing ${url} for ${filename} failed: the server-function ` +
+              `endpoint answered ${response.status}. The call succeeded during the page render, ` +
+              `so its answer at the GET address should too — check middleware that treats ` +
+              `the crawl's requests differently.`
+          );
+        }
+        context.emitFile({ filename, contents: await encodeArtifact(response) });
       }
     }
   };
@@ -137,24 +138,4 @@ function guard(
     `server (mode: "hybrid"). Set uncaptured: "warn" on serverFunctions() to build anyway.`;
   if (policy === "error") throw new Error(message);
   console.warn(message);
-}
-
-async function encodeArtifact(value: unknown, codec: unknown): Promise<string> {
-  if (value === undefined) return "";
-  try {
-    // canonical form doubles as the JSON-safety guard: it throws on
-    // anything a JSON round trip would reshape
-    return canonicalJSON(value);
-  } catch {
-    // rich results ride the codec's framed encoding — the same bytes the
-    // wire would carry, so whatever survives a live call survives the
-    // artifact. Imported lazily: plain-data builds never load the codec.
-    const { serializeResponseStream } = await import("@solidjs/web/server-functions/server");
-    return await new Response(
-      (serializeResponseStream as (v: unknown, c?: unknown) => ReadableStream<Uint8Array>)(
-        value,
-        codec
-      )
-    ).text();
-  }
 }

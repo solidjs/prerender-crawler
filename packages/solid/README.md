@@ -2,7 +2,7 @@
 
 Static server functions for Solid. `prerendered()` declares that a `'use server'` function runs at build time — during prerendering — and that each call's result is captured as a static artifact the deployed client fetches instead of calling a server. Pair it with [`prerender-crawler`](../crawler) and `vite build` produces a folder of files that is a complete Solid app with typed server-side data loading and no server.
 
-Requires `@solidjs/web` 2 (server functions) and `@solidjs/vite-plugin` with `serverFunctions: true`.
+Requires `@solidjs/web` 2.0.0-rc.16 or later (server functions) and `@solidjs/vite-plugin` with `serverFunctions: true`.
 
 ## Setup
 
@@ -39,8 +39,9 @@ export const getPost = query(
 ```
 
 - **Implies `GET`.** A prerendered call is by definition a safe read. Outside a prerendered build — the dev server, or a build without the prerender plugin — the reference behaves exactly like `GET(fn)`, so the app still works against a live server. Dev stays fullstack; production is static.
-- **Arguments are the address.** Each call identity (function id + arguments) becomes one artifact under `_static/`. Both the build and the client derive the key from the arguments, so they must be JSON-safe and spell identically in both realms.
-- **Results are unrestricted.** JSON-safe results are stored as plain JSON; rich values (Dates, Maps, typed errors) ride the server-function codec into the artifact, so whatever survives a live call survives the artifact.
+- **Arguments are the address.** Each call identity (function id + arguments) becomes one artifact under `_static/<build>/`, versioned by the build so a deploy never shares an artifact URL with the previous one (serve `_static/` as immutable). Both the build and the client derive the key from the arguments, so they must be JSON-safe and spell identically in both realms.
+- **Results are unrestricted.** The artifact is the live answer: the build asks the app's own server-function endpoint for each call it captured and stores the response, headers included. Plain data, rich values (Dates, Maps, typed errors) and server components (`return props => <jsx/>`) all come back exactly as a live call would deliver them.
+- **The reference is the runtime's own.** In a prerendered build the client still calls through Solid's transport, so hydration adopts server-rendered reads and server components without a request; only the send is answered from `_static/` (see [Your transport `fetch`](#your-transport-fetch)).
 - **Only calls the build made have artifacts.** In a static build, a client calling with arguments no prerendered page used gets a rejected call (there is no server). In a hybrid build the call falls back to the live server.
 
 Design pages so the crawl exercises the calls the site needs — which happens naturally when pages link to what they use.
@@ -75,7 +76,7 @@ The enumerators behind it are exported too — `solidRouterPages(router | routes
 
 The integration has two jobs.
 
-**Capture.** For the crawl's duration every executed `prerendered` call is collected (the crawl is in-process, so the built server bundle and the integration share a realm), encoded once per call identity, and emitted alongside the pages.
+**Capture.** For the crawl's duration every executed `prerendered` call is collected (the crawl is in-process, so the built server bundle and the integration share a realm), once per call identity. After the crawl each one's GET address is requested through the crawl's transport (`context.fetch`), and the endpoint's answer — status, headers, body — is emitted alongside the pages. Each captured call therefore runs once more at the end of the build.
 
 **The guard.** `@solidjs/vite-plugin` records every server function the client build can dispatch. After the crawl, any of those ids nothing captured is a call a static deployment cannot answer — because the function lacks `prerendered()`, or because no prerendered page called it. In static mode the build fails naming each one:
 
@@ -85,10 +86,9 @@ The integration has two jobs.
 A static deployment has no server to answer them, so these calls fail at runtime. ...
 ```
 
-| Option       | Default                              |                                                                                                               |
-| ------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `uncaptured` | `"error"` static / `"ignore"` hybrid | `"error"`, `"warn"`, or `"ignore"`.                                                                           |
-| `codec`      |                                      | Codec options for encoding rich results; must match the client's `configureServerFunctionsClient({ codec })`. |
+| Option       | Default                              |                                     |
+| ------------ | ------------------------------------ | ----------------------------------- |
+| `uncaptured` | `"error"` static / `"ignore"` hybrid | `"error"`, `"warn"`, or `"ignore"`. |
 
 The guard needs a `@solidjs/vite-plugin` that records function ids in `.vite/solid-server-functions.json`; with an older version it warns that it cannot verify and lets the build through.
 
@@ -99,10 +99,16 @@ The guard needs a `@solidjs/vite-plugin` that records function ids in `.vite/sol
 
 The client learns the posture from `import.meta.env.PRERENDER_MODE`, which the crawler's Vite plugin defines. No plugin, no constant, live behavior.
 
+## Your transport `fetch`
+
+A prerendered reference declares its own send (`withMeta(fn, { fetch })`): the runtime calls it for that function's requests and passes the app's transport `fetch` as `next`, so your `configureServerFunctionsClient({ fetch })` stays yours and the live fallback in hybrid goes through it. Nothing needs wiring.
+
+A host answering a missing artifact with a 200 page (an SPA fallback, an SSR catch-all) is still a miss: artifacts are recognized by their first line, not by status.
+
 ## Other exports
 
 - `solidRouterPages(router | routes, { base? })`, `tanstackRouterPages(router)` — the static-page enumerators behind `announceRoutes`, pure and isomorphic.
-- `staticCallKey(id, args)` / `staticArtifactPath(id, args)` — the artifact key derivation, for tooling that needs to locate an artifact.
+- `staticCallKey(id, args)` / `staticArtifactPath(id, args, build?)` — the artifact key derivation (`_static/<build>/<label>.<key>.txt`), for tooling that needs to locate an artifact.
 - Types: `PrerenderedFunction`, `AnnounceableRouter`, `AnnounceRoutesOptions`, `SolidRouterLike`, `SolidRouteLike`, `TanStackRouterLike`, `ServerFunctionsIntegration`, `ServerFunctionsIntegrationOptions`, `CaptureSink` (server).
 
 ## License

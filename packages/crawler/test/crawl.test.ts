@@ -371,6 +371,62 @@ describe("crawl", () => {
     expect(await readFile(join(outDir, "_static/a1.txt"), "utf8")).toBe("artifact");
   });
 
+  it("lets integrations fetch through the crawl's transport", async () => {
+    const { transport, requests } = site({
+      "/": html("index"),
+      "/api/data": new Response('{"n":1}', { headers: { "x-format": "json" } })
+    });
+    let answered: { status: number; format: string | null; body: string } | undefined;
+    const result = await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      integrations: [
+        {
+          name: "capture",
+          async teardown(context) {
+            const response = await context.fetch("/api/data");
+            answered = {
+              status: response.status,
+              format: response.headers.get("x-format"),
+              body: await response.text()
+            };
+          }
+        }
+      ]
+    });
+    expect(answered).toEqual({ status: 200, format: "json", body: '{"n":1}' });
+    expect(requests).toEqual(["/", "/api/data"]);
+    // a raw request, not a page: nothing rendered or written for it
+    expect(result.pages.map(page => page.path)).toEqual(["/"]);
+  });
+
+  it("hands integrations the build id, and rejects one that is not path-safe", async () => {
+    const seen: (string | undefined)[] = [];
+    const probe = {
+      name: "probe",
+      setup: (context: { buildId?: string }) => void seen.push(context.buildId)
+    };
+    await runPrerender({
+      transport: site({ "/": html("a") }).transport,
+      outDir: await makeOutDir(),
+      integrations: [probe]
+    });
+    await runPrerender({
+      transport: site({ "/": html("a") }).transport,
+      outDir: await makeOutDir(),
+      buildId: "b1",
+      integrations: [probe]
+    });
+    expect(seen).toEqual([undefined, "b1"]);
+    await expect(
+      runPrerender({
+        transport: site({ "/": html("a") }).transport,
+        outDir: await makeOutDir(),
+        buildId: "../x"
+      })
+    ).rejects.toThrow(/buildId/);
+  });
+
   it("renders without writing when emission is off, per-entry flags override", async () => {
     const { transport, requests } = site({
       "/": html(`<a href="/data-only">d</a>`),

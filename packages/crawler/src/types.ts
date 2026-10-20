@@ -112,6 +112,8 @@ export type PrerenderMode = "static" | "hybrid";
  */
 export interface PrerenderContext {
   mode: PrerenderMode;
+  /** The run's `buildId`, when it has one — see `PrerenderOptions.buildId`. */
+  buildId: string | undefined;
   origin: string;
   outDir: string;
   /** Every page rendered so far — complete by `teardown`. Live view; do not mutate. */
@@ -128,6 +130,16 @@ export interface PrerenderContext {
    * it (a build report that should not deploy, say).
    */
   emitFile(file: EmittedFile): void;
+  /**
+   * Sends a request through the crawl's own transport — the same app the
+   * pages render from, paced by `interval` like a page fetch — and returns
+   * the raw response: no redirect handling, no page bookkeeping, nothing
+   * written. A relative url resolves against `origin`. For integrations
+   * that capture what the app answers at an address other than a page (a
+   * data endpoint, a feed), so the artifact is byte-for-byte the live
+   * answer.
+   */
+  fetch(input: Request | string | URL): Promise<Response>;
 }
 
 /** A hook bundle participating in the run without owning any of it. */
@@ -162,6 +174,16 @@ export interface PrerenderIntegration {
 export interface PrerenderOptions {
   /** See `PrerenderMode`. Decides the `emitPages` default. @default "static" */
   mode?: PrerenderMode;
+  /**
+   * Names this build, for integrations that version what they emit by it
+   * (`_static/<buildId>/…`): files of one build never share a URL with the
+   * previous build's, so they can be cached as immutable and a deploy never
+   * serves a stale copy from a CDN or browser cache. Letters, digits, `-`
+   * and `_`. The Vite plugin mints one per build (unless given) and defines
+   * it as `import.meta.env.PRERENDER_BUILD` for the client. Absent, files
+   * are unversioned.
+   */
+  buildId?: string;
   /** Seed pages. @default ["/"] */
   pages?: PagesSource;
   /**
