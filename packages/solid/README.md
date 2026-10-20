@@ -2,7 +2,7 @@
 
 Static server functions for Solid. `prerendered()` declares that a `'use server'` function runs at build time — during prerendering — and that each call's result is captured as a static artifact the deployed client fetches instead of calling a server. Pair it with [`prerender-crawler`](../crawler) and `vite build` produces a folder of files that is a complete Solid app with typed server-side data loading and no server.
 
-Requires `@solidjs/web` 2.0.0-rc.9 or later (server functions) and `@solidjs/vite-plugin` with `serverFunctions: true`.
+Requires `@solidjs/web` 2.0.0-rc.16 or later (server functions) and `@solidjs/vite-plugin` with `serverFunctions: true`.
 
 ## Setup
 
@@ -41,7 +41,7 @@ export const getPost = query(
 - **Implies `GET`.** A prerendered call is by definition a safe read. Outside a prerendered build — the dev server, or a build without the prerender plugin — the reference behaves exactly like `GET(fn)`, so the app still works against a live server. Dev stays fullstack; production is static.
 - **Arguments are the address.** Each call identity (function id + arguments) becomes one artifact under `_static/<build>/`, versioned by the build so a deploy never shares an artifact URL with the previous one (serve `_static/` as immutable). Both the build and the client derive the key from the arguments, so they must be JSON-safe and spell identically in both realms.
 - **Results are unrestricted.** The artifact is the live answer: the build asks the app's own server-function endpoint for each call it captured and stores the response, headers included. Plain data, rich values (Dates, Maps, typed errors) and server components (`return props => <jsx/>`) all come back exactly as a live call would deliver them.
-- **The reference is the runtime's own.** In a prerendered build the client still calls through Solid's transport, so hydration adopts server-rendered reads and server components without a request; only the send is answered from `_static/` (see [`staticFetch`](#staticfetchnext)).
+- **The reference is the runtime's own.** In a prerendered build the client still calls through Solid's transport, so hydration adopts server-rendered reads and server components without a request; only the send is answered from `_static/` (see [Your transport `fetch`](#your-transport-fetch)).
 - **Only calls the build made have artifacts.** In a static build, a client calling with arguments no prerendered page used gets a rejected call (there is no server). In a hybrid build the call falls back to the live server.
 
 Design pages so the crawl exercises the calls the site needs — which happens naturally when pages link to what they use.
@@ -99,22 +99,11 @@ The guard needs a `@solidjs/vite-plugin` that records function ids in `.vite/sol
 
 The client learns the posture from `import.meta.env.PRERENDER_MODE`, which the crawler's Vite plugin defines. No plugin, no constant, live behavior.
 
-## `staticFetch(next?)`
+## Your transport `fetch`
 
-A prerendered reference declares its own send (`withMeta(fn, { fetch })`, solidjs/solid#4170): the runtime calls it for that function's requests and passes the app's transport `fetch` as `next`, so your `configureServerFunctionsClient({ fetch })` stays yours and the live fallback in hybrid goes through it. Nothing needs wiring.
+A prerendered reference declares its own send (`withMeta(fn, { fetch })`): the runtime calls it for that function's requests and passes the app's transport `fetch` as `next`, so your `configureServerFunctionsClient({ fetch })` stays yours and the live fallback in hybrid goes through it. Nothing needs wiring.
 
-On a `@solidjs/web` without reference sends, wire the artifact transport by hand once, passing your own transport `fetch` through it if you have one, or the artifacts are bypassed:
-
-```ts
-import { configureServerFunctionsClient } from "@solidjs/web/server-functions";
-import { staticFetch } from "@solidjs/prerender";
-
-configureServerFunctionsClient({ fetch: staticFetch(myFetch) });
-```
-
-On current runtimes that line is harmless (it passes straight to `myFetch`), so it can stay while you upgrade.
-
-Anything that is not a prerendered call's GET address goes to `next` untouched, and on the server it is `next` unchanged. A host answering a missing artifact with a 200 page (an SPA fallback, an SSR catch-all) is still a miss: artifacts are recognized by their first line, not by status.
+A host answering a missing artifact with a 200 page (an SPA fallback, an SSR catch-all) is still a miss: artifacts are recognized by their first line, not by status.
 
 ## Other exports
 

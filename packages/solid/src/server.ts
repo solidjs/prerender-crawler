@@ -81,16 +81,6 @@ const SERVER_FUNCTION_METADATA = Symbol.for("solid.ServerFunctionMetadata");
 const addressOf = serverFunctionUrl as (fn: unknown, ...args: readonly unknown[]) => string;
 
 /**
- * The server half of `staticFetch`: there are no artifacts to serve here,
- * so it is `next` (or the global `fetch`) unchanged — an isomorphic
- * `configureServerFunctionsClient({ fetch: staticFetch(myFetch) })` costs
- * the server nothing.
- */
-export function staticFetch(next?: typeof globalThis.fetch): typeof globalThis.fetch {
-  return next ?? ((input, init) => globalThis.fetch(input, init));
-}
-
-/**
  * Declares a server function PRERENDERED — the server half. Calling the
  * reference during SSR runs the function in-process exactly like a direct
  * server-function call; during prerendering (when the prerender

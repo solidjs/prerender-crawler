@@ -15,7 +15,6 @@
 //   headers and all) and leaves the app's transport `fetch` alone. On a
 //   miss, hybrid sends the original request through the app's send (a
 //   server is deployed); static has nobody to fall back to and throws.
-//   Runtimes without reference sends wire `staticFetch` instead.
 import {
   GET,
   getServerFunctionMetadata,
@@ -74,64 +73,25 @@ function posture(): Posture {
   };
 }
 
-// Ids declared prerendered in this realm: the only calls `staticFetch`
-// answers from artifacts.
+// Ids declared prerendered in this realm: the only calls answered from
+// artifacts.
 const prerenderedIds = new Set<string>();
-// The inits a reference's own send already looked up: a `staticFetch` the
-// app installed under it passes them on instead of looking again.
-const lookedUp = new WeakSet<object>();
 
-type Fetch = typeof globalThis.fetch;
 type Send = (input: string, init: RequestInit) => Response | Promise<Response>;
-
-/**
- * The transport `fetch` that serves prerendered calls from their static
- * artifacts, for runtimes whose references cannot declare their own send
- * (`@solidjs/web` before solidjs/solid#4170). There, configure it once,
- * passing your own transport `fetch` through it if you have one:
- *
- * ```ts
- * configureServerFunctionsClient({ fetch: staticFetch(myFetch) });
- * ```
- *
- * On current runtimes `prerendered()` declares the artifact send on the
- * reference itself (`withMeta(fn, { fetch })`), so nothing needs wiring and
- * this line, if kept, just passes through to `myFetch`.
- *
- * Requests that are not a prerendered call's GET address — and every
- * request outside a prerendered build — go to `next` untouched. The
- * artifact lookup reaches the global `fetch` in the same tick as the send:
- * hydration adopts a server-rendered read only if its request is made
- * synchronously, so keys are derived without an await.
- */
-export function staticFetch(next?: Fetch): Fetch {
-  // read at call time: hydration swaps the global for the length of a
-  // synchronous trace, and a test may stub it
-  const send: Fetch = (input, init) => (next ?? globalThis.fetch)(input, init);
-  return (input, init) => {
-    if (init && lookedUp.has(init)) return send(input, init);
-    const url = input instanceof Request ? input.url : String(input);
-    const method = (
-      init?.method ?? (input instanceof Request ? input.method : "GET")
-    ).toUpperCase();
-    return serveArtifact(url, method, init, send as Send) ?? send(input, init);
-  };
-}
 
 // The send `prerendered()` declares on its reference: the runtime calls it
 // for that function's requests, with the app's configured send as `next`.
-const referenceSend = (address: string, init: RequestInit, next: Send) => {
-  lookedUp.add(init);
-  return (
-    serveArtifact(address, (init.method ?? "GET").toUpperCase(), init, next) ?? next(address, init)
-  );
-};
+// The artifact lookup reaches the global `fetch` in the same tick as the
+// send: hydration adopts a server-rendered read only if its request is made
+// synchronously, so keys are derived without an await.
+const referenceSend = (address: string, init: RequestInit, next: Send) =>
+  serveArtifact(address, (init.method ?? "GET").toUpperCase(), init, next) ?? next(address, init);
 
 /** Answers a prerendered call's GET address from its artifact; undefined for any other request. */
 function serveArtifact(
   url: string,
   method: string,
-  init: RequestInit | undefined,
+  init: RequestInit,
   send: Send
 ): Promise<Response> | undefined {
   const { mode, base, build } = posture();
@@ -144,7 +104,7 @@ function serveArtifact(
     return; // arguments that cannot address an artifact
   }
   const artifactUrl = base.endsWith("/") ? base + path : `${base}/${path}`;
-  const signal = init?.signal ?? undefined;
+  const signal = init.signal ?? undefined;
   return globalThis.fetch(artifactUrl, signal ? { signal } : undefined).then(async response => {
     const answer = response.ok
       ? decodeArtifact(new Uint8Array(await response.arrayBuffer()))
@@ -152,7 +112,7 @@ function serveArtifact(
     if (answer) return answer;
     // hybrid deployed a live server: a call the build never made is an
     // ordinary GET dispatch, not a failure. Static has nobody to ask.
-    if (mode === "hybrid") return send(url, init ?? {});
+    if (mode === "hybrid") return send(url, init);
     throw new Error(
       `No static artifact for this call of "${call.id}" (${artifactUrl} answered ` +
         `${response.status}${response.ok ? " without an artifact" : ""}): only calls made ` +

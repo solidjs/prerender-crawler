@@ -17,13 +17,12 @@ import {
 } from "@solidjs/web/server-functions/server";
 import {
   configureServerFunctionsClient,
-  createServerReference as createClientReference,
-  withMeta
+  createServerReference as createClientReference
 } from "@solidjs/web/server-functions/client";
 import { createRequestEvent } from "@solidjs/web";
 import { provideRequestEvent } from "@solidjs/web/storage";
 import { prerendered as prerenderedServer } from "../src/server.ts";
-import { prerendered as prerenderedClient, staticFetch } from "../src/client.ts";
+import { prerendered as prerenderedClient } from "../src/client.ts";
 import { serverFunctions } from "../src/integration.ts";
 import { CAPTURE_SINK, decodeArtifact, encodeArtifact, staticArtifactPath } from "../src/shared.ts";
 
@@ -38,32 +37,6 @@ const declare = <A extends readonly unknown[], R>(id: string, fn: (...args: A) =
   prerenderedServer(createServerSideReference(registerServerReference(id, fn)));
 
 const globals = globalThis as { [CAPTURE_SINK]?: unknown };
-
-// Whether this runtime honors a reference's own send (`withMeta(fn, { fetch })`,
-// solidjs/solid#4170). Probed once, with the network stubbed out.
-const referenceSends = await (async () => {
-  let honored = false;
-  vi.stubGlobal(
-    "fetch",
-    async () => new Response("null", { headers: { "X-Server-Function-Format": "8" } })
-  );
-  const probe = withMeta(createClientReference("test/prerendered.ts#probe"), {
-    fetch: (address: string, init: RequestInit, next: typeof fetch) => {
-      honored = true;
-      return next(address, init);
-    }
-  });
-  await probe();
-  vi.unstubAllGlobals();
-  return honored;
-})();
-
-// Older runtimes serve artifacts only through the transport `fetch`, wired by
-// hand; on current ones `prerendered()` needs nothing, and the same line just
-// passes through.
-beforeEach(() => {
-  if (!referenceSends) configureServerFunctionsClient({ fetch: staticFetch() });
-});
 
 afterEach(() => {
   delete globals[CAPTURE_SINK];
@@ -161,8 +134,7 @@ describe("prerendered (client half, hybrid posture)", () => {
     expect(requested[1]).toBe(`/_server/data/${encodeURIComponent(id)}`); // then live
   });
 
-  // needs a runtime with reference sends (solidjs/solid#4170)
-  it.skipIf(!referenceSends)(
+  it(
     "keeps serving artifacts when the app configures its own fetch afterwards",
     async () => {
       posture("hybrid");
@@ -191,8 +163,8 @@ describe("prerendered (client half, hybrid posture)", () => {
     }
   );
 
-  it.skipIf(!referenceSends)(
-    "looks an artifact up once when the app also wires staticFetch, and misses through the app's fetch",
+  it(
+    "misses through the app's fetch after one artifact lookup",
     async () => {
       posture("hybrid");
       const id = nextId("wiredToo");
@@ -209,10 +181,10 @@ describe("prerendered (client half, hybrid posture)", () => {
       const ref = prerenderedClient(createClientReference(id));
       const appSends: string[] = [];
       configureServerFunctionsClient({
-        fetch: staticFetch((address, init) => {
-          appSends.push(String(address));
+        fetch: (address, init) => {
+          appSends.push(address);
           return globalThis.fetch(address, init);
-        })
+        }
       });
       expect(await ref("unseen")).toEqual({ live: true });
       expect(requested.filter(path => path.startsWith("/_static/"))).toHaveLength(1);
