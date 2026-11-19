@@ -137,6 +137,11 @@ describe("indexable", () => {
     json.response.headers.set("content-type", "application/json");
     expect(indexable(json)).toBe(false);
   });
+
+  it("drops pages written with an error status (a seeded not-found page)", () => {
+    expect(indexable(page("missing", { status: 404 }))).toBe(false);
+    expect(indexable(page("ok", { status: 200 }))).toBe(true);
+  });
 });
 
 describe("formatSitemap", () => {

@@ -18,9 +18,16 @@ export interface PageEntry {
    * natural mapping (`/` -> `index.html`, `/about` -> `about/index.html`
    * under `autoSubfolderIndex`, `/sitemap.xml` -> `sitemap.xml`). The
    * escape hatch for host conventions: `{ path: "/404", filename:
-   * "404.html" }`.
+   * "404.html", status: 404 }`.
    */
   filename?: string;
+  /**
+   * The status this page is expected to answer. By default a page that
+   * answers 4xx or 5xx fails the run; a page that answers an error status on
+   * purpose — a host's not-found page — declares it, and is written when it
+   * answers exactly that status. Any other status then fails the run.
+   */
+  status?: number;
   /**
    * Whether this page's HTML is written to disk, overriding the run-level
    * `emitPages` policy for this entry. Rendering is unaffected either way:

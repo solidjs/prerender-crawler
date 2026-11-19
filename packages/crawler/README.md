@@ -98,7 +98,7 @@ const result = await runPrerender({
   // transport: httpTransport("http://localhost:3000"),   a running server
   // transport: await moduleTransport("dist/server.js"),  a handler module
   outDir: "dist",
-  pages: ["/", "/about", { path: "/404", filename: "404.html" }],
+  pages: ["/", "/about", { path: "/404", filename: "404.html", status: 404 }],
   mode: "static"
 });
 
@@ -152,7 +152,7 @@ import { sitemap } from "prerender-crawler";
 runPrerender({ integrations: [sitemap({ hostname: "https://example.com" })] });
 ```
 
-Every rendered page becomes a `<url>` entry — the crawl knows the one thing a route manifest cannot, which pages actually exist with dynamic segments expanded. Redirect stubs, non-HTML responses, query spellings, and pages marked `noindex` (`<meta name="robots">` in the head or an `X-Robots-Tag` header) are left out, the same signals a search engine honors on the live site. Options: `filename`, `trailingSlash`, `filter(page)` for further exclusions, and `entry(page)` returning `lastmod` / `changefreq` / `priority` per page. `indexable(page)` and `formatSitemap(entries)` are exported for tooling that formats its own.
+Every rendered page becomes a `<url>` entry — the crawl knows the one thing a route manifest cannot, which pages actually exist with dynamic segments expanded. Redirect stubs, error statuses (a seeded not-found page), non-HTML responses, query spellings, and pages marked `noindex` (`<meta name="robots">` in the head or an `X-Robots-Tag` header) are left out, the same signals a search engine honors on the live site. Options: `filename`, `trailingSlash`, `filter(page)` for further exclusions, and `entry(page)` returning `lastmod` / `changefreq` / `priority` per page. `indexable(page)` and `formatSitemap(entries)` are exported for tooling that formats its own.
 
 ### Report
 
@@ -183,7 +183,7 @@ runPrerender({
 | ------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mode`                   | `"static"`                                      | See [Modes](#modes). Decides the `emitPages` default.                                                                                                                                   |
 | `buildId`                | minted by the Vite plugin                       | Names the build; integrations version files by it (`context.buildId`).                                                                                                                  |
-| `pages`                  | `["/"]`                                         | Seeds: strings, `{ path, filename?, emit? }` entries, or a (async) function returning them. Duplicates collapse to one render.                                                          |
+| `pages`                  | `["/"]`                                         | Seeds: strings, `{ path, filename?, emit?, status? }` entries, or a (async) function returning them. Duplicates collapse to one render. `status` declares the error status a page answers on purpose (a not-found page) so it is written instead of failing the run. |
 | `crawlLinks`             | `true`                                          | Follow same-origin links in rendered HTML. The only way dynamic routes are discovered without explicit seeding.                                                                         |
 | `hintHeader`             | `"x-prerender"`                                 | Response header naming additional paths (comma-separated). See [Announcing pages](#announcing-pages).                                                                                   |
 | `filter`                 |                                                 | `(path) => boolean`; drops a discovered path before it's fetched.                                                                                                                       |

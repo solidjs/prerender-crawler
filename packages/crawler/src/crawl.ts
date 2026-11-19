@@ -210,7 +210,10 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
         error = thrown;
       }
     }
-    if (!response || error !== undefined || response.status >= 400) {
+    const unexpected =
+      response !== undefined &&
+      (entry.status === undefined ? response.status >= 400 : response.status !== entry.status);
+    if (!response || error !== undefined || unexpected) {
       // The message carries provenance: a 404 is usually a broken link, and
       // the fix lives on the pages that carry it, not at the missing route.
       const from = referrersOf(entry.path);
@@ -220,7 +223,10 @@ export async function runPrerender(options: RunOptions): Promise<PrerenderResult
           ? new Error(`Prerendering ${entry.path} failed${linked}: ${describe(error)}`, {
               cause: error
             })
-          : new Error(`Prerendering ${entry.path} answered ${response!.status}${linked}`);
+          : new Error(
+              `Prerendering ${entry.path} answered ${response!.status}` +
+                `${entry.status === undefined ? "" : ` (expected ${entry.status})`}${linked}`
+            );
       if (failOnError) throw failure;
       // referrers are completed once the crawl settles: pages still in
       // flight may yet link here, and the report should name all of them

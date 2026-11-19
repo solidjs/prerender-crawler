@@ -91,6 +91,47 @@ describe("crawl", () => {
     expect(await readFile(join(outDir, "404.html"), "utf8")).toBe("missing");
   });
 
+  it("writes a seeded entry that answers the status it declares", async () => {
+    // A real not-found route answers 404; declaring it keeps the 404.html convention working.
+    const { transport } = site({ "/404": html("missing", { status: 404 }) });
+    const result = await runPrerender({
+      transport,
+      outDir: await makeOutDir(),
+      pages: [{ path: "/404", filename: "404.html", status: 404 }],
+      crawlLinks: false
+    });
+    expect(await readFile(join(outDir, "404.html"), "utf8")).toBe("missing");
+    expect(result.pages.map(p => [p.path, p.response.status])).toEqual([["/404", 404]]);
+  });
+
+  it("fails a seeded entry that answers a status other than the one it declares", async () => {
+    const { transport } = site({ "/404": html("not actually missing") });
+    await expect(
+      runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: [{ path: "/404", filename: "404.html", status: 404 }],
+        crawlLinks: false,
+        retries: 0
+      })
+    ).rejects.toThrow("Prerendering /404 answered 200 (expected 404)");
+  });
+
+  it("still fails a broken link when another seed declares a 404", async () => {
+    const { transport } = site({
+      "/": html(`<a href="/missing">m</a>`),
+      "/404": html("missing", { status: 404 })
+    });
+    await expect(
+      runPrerender({
+        transport,
+        outDir: await makeOutDir(),
+        pages: ["/", { path: "/404", filename: "404.html", status: 404 }],
+        retries: 0
+      })
+    ).rejects.toThrow(/Prerendering \/missing answered 404 \(linked from \/\)/);
+  });
+
   it("accepts an async pages source", async () => {
     const { transport } = site({ "/a": html("a") });
     const result = await runPrerender({
