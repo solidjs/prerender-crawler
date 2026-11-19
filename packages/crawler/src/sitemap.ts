@@ -75,11 +75,12 @@ export function sitemap(options: SitemapIntegrationOptions): PrerenderIntegratio
 
 /**
  * Whether a rendered page belongs in a sitemap by the signals the page
- * itself gives: an HTML document, not a redirect, not a query spelling,
- * not marked `noindex`.
+ * itself gives: an HTML document, not a redirect, not an error status (a
+ * seeded not-found page), not a query spelling, not marked `noindex`.
  */
 export function indexable(page: RenderedPage): boolean {
   if (page.redirect || page.path.includes("?")) return false;
+  if (page.response.status >= 400) return false;
   if (!(page.response.headers.get("content-type") ?? "").includes("text/html")) return false;
   if (/\bnoindex\b/i.test(page.response.headers.get("x-robots-tag") ?? "")) return false;
   return !robotsMeta(page.html).some(content => /\bnoindex\b/i.test(content));
